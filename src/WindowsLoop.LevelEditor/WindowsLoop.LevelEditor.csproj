@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>WindowsLoop.LevelEditor</AssemblyName>
+    <RootNamespace>WindowsLoop.LevelEditor</RootNamespace>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+
+  <!-- 瓦片默认属性的模型和瓦片工具 / 游戏共用一份源文件，判定口径不会漂。 -->
+  <ItemGroup>
+    <Compile Include="..\Shared\TileMeta.cs" Link="Shared\TileMeta.cs" />
+  </ItemGroup>
+
+  <!-- 构建时把瓦片工具的数据复制进自己的输出目录。
+       编辑器运行时读这份副本：在瓦片工具里改完默认值后跑一次 build.cmd 才会同步。
+       用 xcopy 而不是 MSBuild Copy 任务，和游戏工程保持一致（Copy 任务在本机
+       需要覆盖旧文件时会栈溢出）。 -->
+  <Target Name="CopyTileMeta" AfterTargets="Build">
+    <MakeDir Directories="$(OutDir)assets" />
+    <!-- 刻意不加 /D：默认值可能被回滚成时间戳更旧的版本，按时间戳跳过会留下过期副本。 -->
+    <Exec Command="xcopy /Y /Q &quot;$(MSBuildProjectDirectory)\..\WindowsLoop\assets\tiles.meta.json&quot; &quot;$(OutDir)assets\&quot;"
+          IgnoreExitCode="true" StandardOutputImportance="low" />
+  </Target>
+
+</Project>

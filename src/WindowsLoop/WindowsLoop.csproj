@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>WindowsLoop</AssemblyName>
+    <RootNamespace>WindowsLoop</RootNamespace>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <!-- 瓦片默认属性的模型和瓦片工具 / 关卡编辑器共用一份源文件，格式不会漂。
+       构建时把 tiles.meta.json 复制进输出目录，游戏运行时读这份副本：
+       在瓦片工具里改完默认值后跑一次 build.cmd 才会生效。 -->
+  <ItemGroup>
+    <Compile Include="..\Shared\TileMeta.cs" Link="Shared\TileMeta.cs" />
+  </ItemGroup>
+
+  <!-- 资源用 xcopy 复制，不走 MSBuild 的 Copy 任务。
+       本机上 Copy 任务只要需要"删除目标位置的旧文件"就会在 ParallelCopyTask 里栈溢出
+       （exit 127），-m:1 也压不住。xcopy 直接覆盖、不先删，绕开这条路。
+       注意：素材源目录 tiles\ 和备份 tiles-original.png 不参与复制。 -->
+  <Target Name="CopyGameAssets" AfterTargets="Build">
+    <MakeDir Directories="$(OutDir)assets\levels;$(OutDir)assets\audio" />
+    <Exec Command="xcopy /Y /D /Q &quot;$(MSBuildProjectDirectory)\assets\levels\*.json&quot; &quot;$(OutDir)assets\levels\&quot;"
+          IgnoreExitCode="true" StandardOutputImportance="low" />
+    <Exec Command="xcopy /Y /D /Q &quot;$(MSBuildProjectDirectory)\assets\audio\*.*&quot; &quot;$(OutDir)assets\audio\&quot;"
+          IgnoreExitCode="true" StandardOutputImportance="low" />
+    <Exec Command="xcopy /Y /D /Q &quot;$(MSBuildProjectDirectory)\assets\gem.png&quot; &quot;$(OutDir)assets\&quot;"
+          IgnoreExitCode="true" StandardOutputImportance="low" />
+    <Exec Command="xcopy /Y /D /Q &quot;$(MSBuildProjectDirectory)\assets\player.png&quot; &quot;$(OutDir)assets\&quot;"
+          IgnoreExitCode="true" StandardOutputImportance="low" />
+    <Exec Command="xcopy /Y /D /Q &quot;$(MSBuildProjectDirectory)\assets\tiles.png&quot; &quot;$(OutDir)assets\&quot;"
+          IgnoreExitCode="true" StandardOutputImportance="low" />
+    <!-- 刻意不加 /D：默认值可能被回滚成时间戳更旧的版本，按时间戳跳过会留下过期副本。 -->
+    <Exec Command="xcopy /Y /Q &quot;$(MSBuildProjectDirectory)\assets\tiles.meta.json&quot; &quot;$(OutDir)assets\&quot;"
+          IgnoreExitCode="true" StandardOutputImportance="low" />
+  </Target>
+
+  <!-- 构建前把单文件素材拼回图集。python 不在环境里时只警告，沿用现有 tiles.png，
+       不阻断构建。改素材后想立刻生效，也可以手动跑 tools\build_tileset.py。 -->
+  <Target Name="PackTileSheet" BeforeTargets="Build"
+          Condition="Exists('$(MSBuildProjectDirectory)\..\..\tools\build_tileset.py')">
+    <Exec Command="python &quot;$(MSBuildProjectDirectory)\..\..\tools\build_tileset.py&quot; --pack"
+          ContinueOnError="WarnAndContinue" />
+  </Target>
+
+  <!-- 只取两个纯 managed 子包：Core（波形/音量/重采样）+ Wasapi（Media Foundation 解码 AAC/MP3/WAV）。
+       不装 NAudio meta 包，避免把 Midi / WinMM / Asio 一起拖进来；两个 DLL 都能打进单文件 publish。 -->
+  <ItemGroup>
+    <PackageReference Include="NAudio.Core" Version="3.3.0" />
+    <PackageReference Include="NAudio.Wasapi" Version="3.3.0" />
+  </ItemGroup>
+
+</Project>

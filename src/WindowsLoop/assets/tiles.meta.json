@@ -1,0 +1,976 @@
+{
+  "version": 1,
+  "tiles": [
+    {
+      "sprite": 0,
+      "name": "洞壁·空",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false,
+      "note": "整格全透明，跟背景同色，只适合当看不见的填充"
+    },
+    {
+      "sprite": 1,
+      "name": "洞壁·碎石 1",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 2,
+      "name": "洞壁·碎石 2",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 3,
+      "name": "洞壁·碎石 3",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 4,
+      "name": "洞壁·碎石 4",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 5,
+      "name": "洞壁·碎石 5",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 6,
+      "name": "洞壁·碎石 6",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 7,
+      "name": "洞壁·锁链",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 8,
+      "name": "草地·左上",
+      "group": "地面",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 9,
+      "name": "草地·上",
+      "group": "地面",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 10,
+      "name": "草地·端点",
+      "group": "地面",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 11,
+      "name": "石墙·左上",
+      "group": "石墙",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 12,
+      "name": "石墙·上",
+      "group": "石墙",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 13,
+      "name": "石墙·端点",
+      "group": "石墙",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 14,
+      "name": "木台·上",
+      "group": "木构",
+      "solid": false,
+      "platform": true,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 15,
+      "name": "木台·斜撑",
+      "group": "木构",
+      "solid": false,
+      "platform": true,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 16,
+      "name": "草地·左",
+      "group": "地面",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 17,
+      "name": "草地·中",
+      "group": "地面",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 18,
+      "name": "草地·右",
+      "group": "地面",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 19,
+      "name": "石墙·左",
+      "group": "石墙",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 20,
+      "name": "石墙·中",
+      "group": "石墙",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 21,
+      "name": "灯柱",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 22,
+      "name": "木台·左上",
+      "group": "木构",
+      "solid": false,
+      "platform": true,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 23,
+      "name": "木板",
+      "group": "木构",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 24,
+      "name": "草地·左下",
+      "group": "地面",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 25,
+      "name": "草地·下",
+      "group": "地面",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 26,
+      "name": "草地·右下",
+      "group": "地面",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 27,
+      "name": "石墙·左下",
+      "group": "石墙",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 28,
+      "name": "石墙·下",
+      "group": "石墙",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 29,
+      "name": "电脑桌",
+      "group": "水",
+      "solid": false,
+      "platform": false,
+      "water": true,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 30,
+      "name": "木柱",
+      "group": "木构",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 31,
+      "name": "红鸟·飞行 1",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 32,
+      "name": "石墙·裂纹",
+      "group": "石墙",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 33,
+      "name": "石墙·毛石 1",
+      "group": "石墙",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 34,
+      "name": "石墙·毛石 2",
+      "group": "石墙",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 35,
+      "name": "砂岩·左上",
+      "group": "砂岩",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 36,
+      "name": "砂岩·上",
+      "group": "砂岩",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 37,
+      "name": "砂岩·端点",
+      "group": "砂岩",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 38,
+      "name": "红鸟·飞行 2",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 39,
+      "name": "红鸟·站立",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 40,
+      "name": "石柱·左",
+      "group": "石墙",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 41,
+      "name": "鸟·飞行 1",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 42,
+      "name": "石柱·右",
+      "group": "石墙",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 43,
+      "name": "砂岩·左",
+      "group": "砂岩",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 44,
+      "name": "砂岩·中",
+      "group": "砂岩",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 45,
+      "name": "火把",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 46,
+      "name": "木梯·顶部",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false,
+      "note": "看着像能站的横梁，实际很薄；要站人请用 S 手动标阻挡"
+    },
+    {
+      "sprite": 47,
+      "name": "石梯·顶部",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 48,
+      "name": "鸟·站立",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 49,
+      "name": "鸟·飞行 2",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false,
+      "note": "level2 里的 'J' 弹簧用的是这块，贴图其实不是弹簧"
+    },
+    {
+      "sprite": 50,
+      "name": "石柱·转角",
+      "group": "石墙",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 51,
+      "name": "砂岩·左下",
+      "group": "砂岩",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 52,
+      "name": "砂岩·下",
+      "group": "砂岩",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 53,
+      "name": "洞壁·碎点",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false,
+      "note": "几乎空，基本没东西"
+    },
+    {
+      "sprite": 54,
+      "name": "木梯",
+      "group": "木构",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": true,
+      "spring": false,
+      "note": "真正的梯子贴图；level2 / bg-test 里那个 'L' 还是旧的 65（水纹）"
+    },
+    {
+      "sprite": 55,
+      "name": "石梯",
+      "group": "木构",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": true,
+      "spring": false
+    },
+    {
+      "sprite": 56,
+      "name": "洞壁·蓝块",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 57,
+      "name": "洞壁·苔块",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 58,
+      "name": "洞壁·蓝斑",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 59,
+      "name": "洞壁·碎石带",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 60,
+      "name": "红珊瑚",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 61,
+      "name": "洞壁·岩块",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 62,
+      "name": "水晶·碎片",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 63,
+      "name": "水面·顶",
+      "group": "水",
+      "solid": false,
+      "platform": false,
+      "water": true,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 64,
+      "name": "壁龛·有水",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 65,
+      "name": "瀑布·细",
+      "group": "水",
+      "solid": false,
+      "platform": false,
+      "water": true,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 66,
+      "name": "洞壁·岩块 2",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 67,
+      "name": "红幔",
+      "group": "物件",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 68,
+      "name": "岩浆·满",
+      "group": "岩浆",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 69,
+      "name": "洞壁·碎石底",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 70,
+      "name": "雪坡·右",
+      "group": "雪",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 71,
+      "name": "雪坡·左",
+      "group": "雪",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 72,
+      "name": "浪花·左",
+      "group": "雪",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 73,
+      "name": "瀑布·沫",
+      "group": "水",
+      "solid": false,
+      "platform": false,
+      "water": true,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 74,
+      "name": "浪花·右",
+      "group": "雪",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 75,
+      "name": "瀑布·宽",
+      "group": "水",
+      "solid": false,
+      "platform": false,
+      "water": true,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 76,
+      "name": "岩浆·流",
+      "group": "岩浆",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 77,
+      "name": "石堆",
+      "group": "物件",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false,
+      "note": "一堆挡路的巨石，默认实心"
+    },
+    {
+      "sprite": 78,
+      "name": "雪坡·上",
+      "group": "雪",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 79,
+      "name": "雪坡·右上",
+      "group": "雪",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 80,
+      "name": "水面",
+      "group": "水",
+      "solid": false,
+      "platform": false,
+      "water": true,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 81,
+      "name": "水面·晶",
+      "group": "水",
+      "solid": false,
+      "platform": false,
+      "water": true,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 82,
+      "name": "水面·沫",
+      "group": "水",
+      "solid": false,
+      "platform": false,
+      "water": true,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 83,
+      "name": "洞壁·深蓝板",
+      "group": "洞壁",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false,
+      "note": "满铺不透明，当岩体用"
+    },
+    {
+      "sprite": 84,
+      "name": "岩浆·壳",
+      "group": "岩浆",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 85,
+      "name": "草地·斜坡",
+      "group": "地面",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false,
+      "note": "引擎没有斜坡物理，实际按整格实心算"
+    },
+    {
+      "sprite": 86,
+      "name": "草丛 1",
+      "group": "地面",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false,
+      "note": "纯装饰，站在上面不会有碰撞"
+    },
+    {
+      "sprite": 87,
+      "name": "草丛 2",
+      "group": "地面",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 88,
+      "name": "洞壁·蓝斑 2",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 89,
+      "name": "洞壁·蓝竖条",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 90,
+      "name": "洞壁·纯色板",
+      "group": "洞壁",
+      "solid": true,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false,
+      "note": "满铺不透明，当岩体用"
+    },
+    {
+      "sprite": 91,
+      "name": "洞壁·蓝竖条 2",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 92,
+      "name": "洞壁·红带",
+      "group": "洞壁",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 93,
+      "name": "宝石",
+      "group": "道具",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false,
+      "note": "素材来自 assets/gem.png（图集外补进去的 93 号格）。它只是一块普通瓦片，碰到会怎样由网格事件决定"
+    },
+    {
+      "sprite": 94,
+      "name": "未命名 94",
+      "group": "未分类",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    },
+    {
+      "sprite": 95,
+      "name": "未命名 95",
+      "group": "未分类",
+      "solid": false,
+      "platform": false,
+      "water": false,
+      "climb": false,
+      "spring": false
+    }
+  ]
+}
