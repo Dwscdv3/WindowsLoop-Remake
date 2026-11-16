@@ -104,7 +104,26 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
+    // ── Z 序 ──────────────────────────────────────────────────────────────
 
     public const int VK_A = 0x41, VK_D = 0x44, VK_W = 0x57, VK_S = 0x53, VK_SPACE = 0x20, VK_R = 0x52, VK_M = 0x4D, VK_ESCAPE = 0x1B;
+    /// <summary>Z 序最上面那个窗口（桌面的第一个子窗口）。</summary>
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetTopWindow(IntPtr hWnd);
+
+    /// <summary>按 uCmd（GW_HWNDNEXT 等）取相邻 Z 序的窗口。</summary>
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+        int X, int Y, int cx, int cy, uint uFlags);
+
+    /// <summary>顺着 Z 序往下走的那一步。</summary>
+    public const uint GW_HWNDNEXT = 0x0002;
+
+    public const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOACTIVATE = 0x0010;
+
+
     public const int VK_UP = 0x26, VK_DOWN = 0x28;
 }

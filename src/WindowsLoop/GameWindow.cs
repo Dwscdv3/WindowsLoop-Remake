@@ -54,6 +54,12 @@ internal sealed class GameWindow : Form
     public bool Dragging;
     public Point PreviewOrigin;
 
+    /// <summary>
+    /// 这块窗口正处在"新生动画"里（还没落定）。这期间它不算进任何窗口组、
+    /// 不参与相邻关系提交、不能被拖动 —— 否则飞过去蹭到谁就会被当成"连上了"。
+    /// </summary>
+    public bool Spawning;
+
     public GameWindow(Game game, Piece piece, Point clientOrigin)
     {
         _game = game;
@@ -213,6 +219,10 @@ internal sealed class GameWindow : Form
         base.OnMouseDown(e);
         if (e.Button != MouseButtons.Left) return;
 
+        // 新生动画期间整局都不接受拖动：窗口正在抖/正在飞，
+        // 这时候抓起来的落点、吸附目标全是不该存在的中间状态
+        if (_game.SpawnAnimating || Spawning) return;
+
         var screen = PointToScreen(e.Location);
         var cs = ClientScreen.Location;
         _dragGrab = new Point(screen.X - cs.X, screen.Y - cs.Y);
@@ -256,7 +266,7 @@ internal sealed class GameWindow : Form
     {
         foreach (var other in _game.Windows)
         {
-            if (other == this || other.IsDisposed) continue;
+            if (other == this || other.IsDisposed || other.Spawning) continue;
             var r = other.ClientScreen;
 
             bool vOverlap = p.Y < r.Bottom && p.Y + ViewTilesY * TileSize > r.Top;
@@ -368,6 +378,7 @@ internal sealed class GameWindow : Form
     {
         var p = _game.Player;
         if (p.Piece != Piece) return;   // 这块窗口显示的不是同一张地图
+        if (Spawning) return;           // 还在飞的新窗口不画角色（单块地图的关卡里会撞上同一个 Piece）
 
         // 角色的地图坐标和镜头始终在同一圈里（跨窗口交接时就换算好了），直接用差值
         float lx = (p.Pos.X - CamX) * LogicalCell;

@@ -115,7 +115,7 @@ internal static class Program
                     if (Environment.GetEnvironmentVariable("WL_DEBUG_LAYOUT") == "1")
                         try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "windowsloop-debug.log"), $"pipe: {command}\n"); } catch { }
                     if (command == "open")
-                        game.Enqueue(game.OpenWindow);
+                        game.Enqueue(game.SpawnWindow);   // 再次双击程序也要演一遍"吐出窗口"
                 }
                 catch (Exception)
                 {

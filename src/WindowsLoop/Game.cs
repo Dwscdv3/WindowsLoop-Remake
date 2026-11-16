@@ -94,13 +94,14 @@ internal sealed class Game
 
     public Piece PieceForSlot(int slot) => Level.Pieces[slot % Level.Pieces.Count];
 
+    /// <summary>
+    /// 直接开一个窗口（不带动画）。开局进关、以及没有母体可当"吐出方"时的兜底走这里。
+    /// 玩家手动开窗请用 <see cref="SpawnWindow"/>。
+    /// </summary>
     public void OpenWindow()
     {
         if (DebugLayout) Log($"open: windows={Windows.Count} max={Level.MaxWindows}");
         if (Windows.Count >= Level.MaxWindows) return;
-
-        int slot = Windows.Count;
-        var piece = PieceForSlot(slot);
 
         Point clientOrigin;
         if (Windows.Count == 0)
@@ -125,20 +126,496 @@ internal sealed class Game
             GameWindow.GridRound(clientOrigin.X),
             GameWindow.GridRound(clientOrigin.Y)));
 
-        var window = new GameWindow(this, piece, clientOrigin);
+        bool first = Windows.Count == 0;
+        if (CreateWindowAt(clientOrigin) == null) return;
+
+        RefreshLayout();
+        if (!first && !_suppressSfx) Audio.Play(Sfx.WindowOpen);
+    }
+
+    /// <summary>
+    /// 造一块窗口并按给定客户区原点显示出来。位置规则、动效、音效都归调用方管。
+    /// 返回 null 表示已经到关卡的最大窗口数。
+    /// </summary>
+    /// <param name="spawning">
+    /// true = 这块窗口是"新生动画"里飞出来的：**显示之前**就打上 <see cref="GameWindow.Spawning"/>，
+    /// 免得它在 Show 触发的第一次布局里就被算成一个正常窗口。
+    /// </param>
+    GameWindow? CreateWindowAt(Point clientOrigin, bool spawning = false)
+    {
+        if (Windows.Count >= Level.MaxWindows) return null;
+
+        var piece = PieceForSlot(Windows.Count);
+        var window = new GameWindow(this, piece, clientOrigin) { Spawning = spawning };
+
+        // 镜头先对准这块地图的出生点：窗口一显示就是"刚进这一块"的画面
         var spawnPos = new Vector2(piece.Spawn.X + 0.5f, piece.Spawn.Y + 0.5f);
         var cam = CameraTarget(spawnPos);
         window.SetCamera(cam.X, cam.Y);
 
-        bool first = Windows.Count == 0;
         Windows.Add(window);
         window.Show();
 
-        if (Windows.Count == 1)
-            PlaceAtSpawn(window);
+        if (Windows.Count == 1) PlaceAtSpawn(window);
+        return window;
+    }
 
+    // ── 新生窗口的动画：抖动 → 吐出 → 飞出弹停 ──────────────────────────
+
+    enum SpawnPhase { Shake, Fly, Settle }
+
+    /// <summary>一次"吐出一个窗口"的演出状态。同一时间只演一个。</summary>
+    sealed class SpawnAnim
+    {
+        public SpawnPhase Phase = SpawnPhase.Shake;
+        public float T;
+
+        /// <summary>母体组的每一块，以及它抖动前的位置 —— 抖完必须分毫不差地放回去。</summary>
+        public readonly List<(GameWindow Window, Point Origin)> Group = new();
+
+        /// <summary>母体里最靠近吐出方向的那块，新窗口从它身上冒出来。</summary>
+        public GameWindow Edge = null!;
+
+        /// <summary>正在飞的那块。</summary>
+        public GameWindow Flying = null!;
+
+        public Vector2 Dir;
+
+        /// <summary>飞行中的浮点客户区原点（窗口坐标只能是整数，这里保留小数，末帧再取整）。</summary>
+        public Vector2 Pos, Vel;
+
+        /// <summary>收尾：从停下的位置收到哪个整格点。</summary>
+        public Vector2 SettleFrom, SettleTo;
+
+        /// <summary>撞边时已经按"整格落点"反算过回弹初速，收尾不用再吸。</summary>
+        public bool Retargeted;
+    }
+
+    SpawnAnim? _spawn;
+
+    /// <summary>演出途中又按了一次：等这次演完接着演下一次，别把玩家的输入吞掉。</summary>
+    bool _spawnQueued;
+
+    /// <summary>正在演"新生窗口"。这期间不提交相邻关系、窗口也不接受拖动。</summary>
+    public bool SpawnAnimating => _spawn != null;
+
+    const float ShakeTime = 1.0f;        // 抖多久
+    const float ShakeAmplitude = 8f;     // 抖到最大时偏移几像素
+    const float ShakeHz = 15f;           // 抖多快（取 15 = 60fps 的四分之一周期，画面不打架）
+
+    /// <summary>
+    /// 空气阻尼系数（就是"摩擦力"）。速度按 v *= exp(-k·dt) 等比衰减，自由行程 ≈ v0/k。
+    /// 调小 → 衰减更慢、尾巴更长、飞得更久；调大 → 很快刹住。
+    /// </summary>
+    const float FlyDrag = 1.95f;
+
+    /// <summary>撞屏幕边后保留的速度比例 —— "反弹一下"就是它。</summary>
+    const float FlyBounce = 0.2f;
+
+    /// <summary>
+    /// 飞出时的"行程余量"：初速按 (到边距离 + 余量) 给，于是撞边那一刻还剩
+    /// FlyDrag × 余量 的速度，而**回弹距离 = FlyBounce × 余量**（和摩擦系数无关）。
+    /// 现在 720 → 回弹约 144px（三格半），总飞行时间也一起拉到 1.2s 上下。
+    /// </summary>
+    const float FlyRunOut = 720f;
+
+    /// <summary>
+    /// 撞边后**看得见**的回弹距离：按恢复系数接过来的速度，衰减到停速为止走过的路程。
+    /// 用来给"整格落点"定一个参照位置（见 <see cref="RetargetBounce"/>）。
+    /// </summary>
+    static float NominalBounceRun =>
+        (FlyBounce * FlyDrag * FlyRunOut - FlyStopSpeed) / FlyDrag;
+
+    /// <summary>
+    /// 选方向时垂直方向（上/下）的权重。窗口是 3:2 —— 同样多的像素余量，
+    /// 竖直方向能容下的"窗口数"是水平方向的 600/400 = 1.5 倍。
+    /// </summary>
+    const float VerticalWeight = 1.5f;
+
+    const float FlyStopSpeed = 70f;      // px/s，低于这个算停稳
+    const float FlyMaxTime = 3f;         // 兜底：万一一直慢不下来
+    const float SettleTime = 0.13f;      // 停稳后把位置收进整格用的时间
+
+    /// <summary>
+    /// 玩家开一个新窗口（N 键 / 右键菜单 / 再次双击程序都走这里）。
+    ///
+    /// 演出：先让一个窗口组快速颤抖约 1 秒（幅度越来越大），再从它里面最靠近吐出方向的
+    /// 那块窗口身上，把新窗口朝那个方向吐出去；新窗口以指数阻尼减速飞行，
+    /// 撞到屏幕边上按恢复系数弹一下，停稳后收进整格。
+    ///
+    /// 选母体和方向**都不是随机**：全局取"到工作区边界余量最大"的那一个方向
+    /// （见 <see cref="PickSpawnSite"/>），由拥有它的窗口组当母体。
+    /// </summary>
+    public void SpawnWindow()
+    {
+        if (Fading || Paused) return;                    // 换关过场 / 拖窗口时不演
+        if (Windows.Count == 0) { OpenWindow(); return; }
+        if (Windows.Count >= Level.MaxWindows) return;
+
+        // 上一次还没演完（一次只演一个）：记一笔，等它落地后再接着演，
+        // 这样连按 N 不会只出来一个窗口，也不会两场动画抢同一批窗口
+        if (_spawn != null) { _spawnQueued = true; return; }
+
+        SyncGroups();   // 母体候选必须是这一帧真实的窗口组
+        if (!PickSpawnSite(out var mother, out var edge, out var dir))
+        {
+            OpenWindow();   // 没窗口组可当母体，退回直接开窗
+            return;
+        }
+
+        // 新窗口在抖动阶段就建好，全程和"最靠近吐出方向的那块"完全重合。
+        // 它被压在母体组最下面（PutBelowGroup），所以这一段完全看不见；
+        // 等真被吐出去那一刻才开始移动 —— 也就不会出现"建窗口那一帧闪一下"。
+        var window = CreateWindowAt(edge.ClientScreen.Location, spawning: true);
+        if (window == null) return;
+
+        PutBelowGroup(window, mother);
+
+        var anim = new SpawnAnim { Flying = window, Edge = edge, Dir = dir };
+        foreach (var w in mother)
+            if (!w.IsDisposed) anim.Group.Add((w, w.ClientScreen.Location));
+        _spawn = anim;
+    }
+
+    /// <summary>
+    /// 挑母体窗口组和吐出方向。
+    ///
+    /// 口径：把每个窗口组 × 四个方向都算一遍"这条通道还能飞多远"，
+    /// **全局取最大的那一个** —— 挑的不是"某个组"，而是"当前屏幕上最开阔的那一处"，
+    /// 由拥有这个方向的组来吐。
+    ///
+    /// "还能飞多远"= 从组里最靠外的这块窗口出发，沿这个方向到**最近的挡路物**的距离，
+    /// 挡路物既包括屏幕边界，**也包括别的窗口**（见 <see cref="Runway"/>）——
+    /// 只按屏幕边界算的话，会挑出"前面横着一块窗口"的方向，让新窗口从人家身上飞过去。
+    /// 注意这只管"选哪个方向"：真飞起来仍然只在屏幕边界反弹，不会撞窗口。
+    ///
+    /// 所以这里没有任何随机成分：同一套布局，按多少次 N 都是同一个方向。
+    /// 垂直方向另有 1.5 倍权重，见 <see cref="VerticalWeight"/>。
+    /// </summary>
+    bool PickSpawnSite(out List<GameWindow> mother, out GameWindow edge, out Vector2 dir)
+    {
+        mother = new List<GameWindow>();
+        dir = Vector2.Zero;
+        edge = null!;
+
+        List<GameWindow>? bestMembers = null;
+        GameWindow? bestEdge = null;
+        int bestDir = -1;
+        float bestScore = float.NegativeInfinity;
+
+        foreach (var group in _groups)
+        {
+            var live = new List<GameWindow>();
+            foreach (var w in group.Windows)
+                if (!w.IsDisposed && !w.Spawning) live.Add(w);
+            if (live.Count == 0) continue;
+
+            for (int i = 0; i < 4; i++)
+            {
+                // 方向定了才知道从哪块出发：那块决定了这条通道有多宽、谁算挡路
+                var from = EdgeToward(live, i);
+                if (from == null) continue;
+
+                // 垂直方向 ×1.5：窗口是 3:2（600×400），同样多的像素余量，
+                // 竖直方向相当于能容下 1.5 倍的"窗口宽度"那么多空间；
+                // 按窗口尺寸归一化就是 余量/400 对 余量/600，正好差这个系数。
+                float score = Runway(from, i) * (i >= 2 ? VerticalWeight : 1f);
+                if (score <= bestScore) continue;
+
+                bestScore = score;
+                bestDir = i;
+                bestEdge = from;
+                bestMembers = live;
+            }
+        }
+
+        if (bestMembers == null || bestEdge == null || bestDir < 0) return false;
+
+        mother = bestMembers;
+        edge = bestEdge;
+        dir = DirOf(bestDir);
+        return true;
+    }
+
+    static Vector2 DirOf(int dirIndex) => dirIndex switch
+    {
+        0 => new Vector2(-1, 0),
+        1 => new Vector2(1, 0),
+        2 => new Vector2(0, -1),
+        _ => new Vector2(0, 1),
+    };
+
+    /// <summary>组里"最靠近这个方向"的那块：往右取最右、往下取最下，往左/上取最左/最上。</summary>
+    static GameWindow? EdgeToward(List<GameWindow> windows, int dirIndex)
+    {
+        GameWindow? best = null;
+        float at = float.NegativeInfinity;
+        foreach (var w in windows)
+        {
+            var r = w.ClientScreen;
+            float along = dirIndex switch { 0 => -r.Left, 1 => r.Right, 2 => -r.Top, _ => r.Bottom };
+            if (best == null || along > at) { at = along; best = w; }
+        }
+        return best;
+    }
+
+    /// <summary>
+    /// 从 <paramref name="from"/> 这块窗口出发朝 dirIndex 方向，**到最近的挡路物还有多远**。
+    /// 挡路物取屏幕工作区边界与所有别的窗口里最近的那个；只算"同一条通道里"的窗口
+    /// （沿飞行方向在前方、且垂直/水平跨度有交集），侧边的窗口不算挡路。
+    ///
+    /// 母体组自己的成员不算挡路 —— 新窗口本来就是从它们身下钻出来的，Z 序也压在它们下面。
+    /// </summary>
+    float Runway(GameWindow from, int dirIndex)
+    {
+        var r = from.ClientScreen;
+        var work = Screen.FromRectangle(r).WorkingArea;
+
+        float run = dirIndex switch
+        {
+            0 => r.Left - work.Left,
+            1 => work.Right - r.Right,
+            2 => r.Top - work.Top,
+            _ => work.Bottom - r.Bottom,
+        };
+
+        foreach (var other in Windows)
+        {
+            if (other == from || other.IsDisposed || other.Spawning) continue;
+            if (other.Group == from.Group) continue;   // 母体组自己人不算挡路
+
+            var o = other.ClientScreen;
+            switch (dirIndex)
+            {
+                case 0:   // 左：横跨在自己左边的，且纵向有交集
+                    if (o.Right > r.Left || o.Top >= r.Bottom || o.Bottom <= r.Top) continue;
+                    run = MathF.Min(run, r.Left - o.Right);
+                    break;
+                case 1:   // 右
+                    if (o.Left < r.Right || o.Top >= r.Bottom || o.Bottom <= r.Top) continue;
+                    run = MathF.Min(run, o.Left - r.Right);
+                    break;
+                case 2:   // 上：纵向在自己上面，且横向有交集
+                    if (o.Bottom > r.Top || o.Left >= r.Right || o.Right <= r.Left) continue;
+                    run = MathF.Min(run, r.Top - o.Bottom);
+                    break;
+                default:  // 下
+                    if (o.Top < r.Bottom || o.Left >= r.Right || o.Right <= r.Left) continue;
+                    run = MathF.Min(run, o.Top - r.Bottom);
+                    break;
+            }
+        }
+
+        return MathF.Max(run, 0f);
+    }
+
+    /// <summary>
+    /// 把新窗口插到母体组的最下面，让整组在 Z 序上压着它。
+    ///
+    /// 顶层窗口的 Z 序就是从 GetTopWindow 起顺着 GW_HWNDNEXT 一路往下走，
+    /// 走一遍记下最后一个属于这组的句柄 —— 那就是组里最靠下的那块，插到它下面即可。
+    /// </summary>
+    static void PutBelowGroup(GameWindow window, List<GameWindow> group)
+    {
+        var members = new HashSet<IntPtr>();
+        foreach (var w in group)
+            if (!w.IsDisposed) members.Add(w.Handle);
+
+        IntPtr lowest = IntPtr.Zero;
+        for (IntPtr h = Native.GetTopWindow(IntPtr.Zero); h != IntPtr.Zero; h = Native.GetWindow(h, Native.GW_HWNDNEXT))
+            if (members.Contains(h)) lowest = h;
+
+        if (lowest == IntPtr.Zero) return;
+
+        Native.SetWindowPos(window.Handle, lowest, 0, 0, 0, 0,
+            Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+    }
+
+    void UpdateSpawn(float dt)
+    {
+        var s = _spawn;
+        if (s == null) return;
+
+        // 演出途中被换关/重开拆掉了窗口，直接放弃
+        if (s.Flying.IsDisposed || s.Edge.IsDisposed) { _spawn = null; return; }
+
+        switch (s.Phase)
+        {
+            case SpawnPhase.Shake: UpdateShake(s, dt); break;
+            case SpawnPhase.Fly: UpdateFly(s, dt); break;
+            case SpawnPhase.Settle: UpdateSettle(s, dt); break;
+        }
+    }
+
+    void UpdateShake(SpawnAnim s, float dt)
+    {
+        s.T += dt;
+        float k = Math.Clamp(s.T / ShakeTime, 0f, 1f);
+
+        // 幅度按 k² 涨：前半秒只是细微的嗡，最后几帧明显在抖
+        float amp = ShakeAmplitude * k * k;
+        float phase = s.T * ShakeHz * MathF.Tau;
+
+        // 整组共用同一个偏移，不是各自抖：拼在一起的两块地图必须一起动，
+        // 各抖各的会把接缝抖开，看着像两张纸互相摩擦。
+        // 两轴差 90° 相位 = 绕小圈地抖，比单纯左右晃更像"憋着一股劲"。
+        var off = new Point(
+            (int)MathF.Round(amp * MathF.Sin(phase)),
+            (int)MathF.Round(amp * 0.72f * MathF.Cos(phase)));
+
+        foreach (var (w, origin) in s.Group)
+            if (!w.IsDisposed) w.SetClientOrigin(new Point(origin.X + off.X, origin.Y + off.Y));
+
+        // 新窗口全程跟着"冒出来的那一块"，被压在它下面所以看不见
+        s.Flying.SetClientOrigin(s.Edge.ClientScreen.Location);
+
+        if (s.T >= ShakeTime) BeginFly(s);
+    }
+
+    void BeginFly(SpawnAnim s)
+    {
+        // 母体组先归位：抖动留下的偏移必须在吐出这一帧清干净，
+        // 否则组内相邻关系和整格对齐都会带着几像素的误差
+        foreach (var (w, origin) in s.Group)
+            if (!w.IsDisposed) w.SetClientOrigin(origin);
+
+        // 起飞点就取归位后那块窗口的位置：新窗口这一帧正好严丝合缝地贴在它后面，
+        // 下一帧开始往外滑，看起来才是"从它身上冒出来"
+        s.Flying.SetClientOrigin(s.Edge.ClientScreen.Location);
+
+        s.Phase = SpawnPhase.Fly;
+        s.T = 0f;
+
+        var start = s.Flying.ClientScreen.Location;
+        s.Pos = new Vector2(start.X, start.Y);
+
+        var size = new Size(GameWindow.ViewTilesX * GameWindow.TileSize, GameWindow.ViewTilesY * GameWindow.TileSize);
+        var work = Screen.FromPoint(new Point(start.X + size.Width / 2, start.Y + size.Height / 2)).WorkingArea;
+
+        // 起飞点到该方向屏幕边的距离
+        float dist = s.Dir.X > 0 ? work.Right - size.Width - s.Pos.X
+                   : s.Dir.X < 0 ? s.Pos.X - work.Left
+                   : s.Dir.Y > 0 ? work.Bottom - size.Height - s.Pos.Y
+                                 : s.Pos.Y - work.Top;
+        dist = MathF.Max(dist, 0f);
+
+        // 指数阻尼下 x(∞) = v0 / FlyDrag，也就是"这点初速最多能飞多远"。
+        // 要让它的行程比"到边的距离"多出 FlyRunOut：
+        //
+        //     v0 / FlyDrag = dist + FlyRunOut   ⇒   v0 = FlyDrag · (dist + FlyRunOut)
+        //
+        // 多出来的那截行程就是撞边时还剩的动能：速度 = FlyDrag · FlyRunOut，
+        // 乘上恢复系数后回弹 FlyBounce · FlyRunOut —— 撞一下、往回弹一小段，然后收住。
+        float v0 = MathF.Max((dist + FlyRunOut) * FlyDrag, 600f);
+        s.Vel = s.Dir * v0;
+
+        Audio.Play(Sfx.WindowOpen);   // 窗口真出来的这一声，和画面同一帧
+    }
+
+    void UpdateFly(SpawnAnim s, float dt)
+    {
+        s.T += dt;
+
+        s.Pos += s.Vel * dt;
+        s.Vel *= MathF.Exp(-FlyDrag * dt);   // 空气阻尼：速度指数衰减，位移自然收尾
+
+        var size = new Size(GameWindow.ViewTilesX * GameWindow.TileSize, GameWindow.ViewTilesY * GameWindow.TileSize);
+        var work = Screen.FromPoint(new Point(
+            (int)(s.Pos.X + size.Width / 2f), (int)(s.Pos.Y + size.Height / 2f))).WorkingArea;
+        float maxX = MathF.Max(work.Left, work.Right - size.Width);
+        float maxY = MathF.Max(work.Top, work.Bottom - size.Height);
+
+        // 撞屏幕边：位置钉在边界上，速度换成"正好停在整格落点上"的那个值（见 RetargetBounce）。
+        // 飞行严格沿一个轴，所以只看飞行轴就够了。
+        bool hit = false;
+        if (s.Dir.X > 0 && s.Pos.X >= maxX) { s.Pos.X = maxX; hit = true; }
+        else if (s.Dir.X < 0 && s.Pos.X <= work.Left) { s.Pos.X = work.Left; hit = true; }
+        if (s.Dir.Y > 0 && s.Pos.Y >= maxY) { s.Pos.Y = maxY; hit = true; }
+        else if (s.Dir.Y < 0 && s.Pos.Y <= work.Top) { s.Pos.Y = work.Top; hit = true; }
+
+        if (hit && !s.Retargeted) RetargetBounce(s);
+
+        s.Flying.SetClientOrigin(new Point((int)MathF.Round(s.Pos.X), (int)MathF.Round(s.Pos.Y)));
+
+        if (s.Vel.Length() < FlyStopSpeed || s.T > FlyMaxTime) BeginSettle(s);
+    }
+
+    /// <summary>
+    /// 撞上屏幕边之后，把回弹初速**反算**成"正好停在最近的整格点上"。
+    ///
+    /// 原来按恢复系数自由回弹，落点是个任意像素值，收尾时还得再吸一次整格 ——
+    /// 那一下十几像素的位移就是"停住之后又被拽了一下"。
+    /// 现在先定落点（沿飞行轴退一个名义回弹距离再吸整格），再定初速
+    /// （衰减到停速时正好走完这段距离），于是收尾的吸附距离≈0。
+    /// </summary>
+    void RetargetBounce(SpawnAnim s)
+    {
+        s.Retargeted = true;
+
+        bool horizontal = s.Dir.X != 0;
+        float posAxis = horizontal ? s.Pos.X : s.Pos.Y;
+
+        // 撞的是正向边就往回退，垂直方向本来就在整格上，不用动
+        float back = s.Dir.X > 0 || s.Dir.Y > 0 ? -1f : 1f;
+        float restAxis = GameWindow.GridRound((int)MathF.Round(posAxis + back * NominalBounceRun));
+
+        // 离散积分下，速度从 v 衰减到 FlyStopSpeed 期间走过的距离是
+        //   dt · (v - FlyStopSpeed) / (1 - r)，  r = exp(-k·dt)
+        // 反解出 v：这样"最后一帧速度掉到停速"的那一刻，位置正好压在 restAxis 上。
+        float r = MathF.Exp(-FlyDrag * FixedDt);
+        float run = MathF.Abs(restAxis - posAxis);
+        float v = run * (1f - r) / FixedDt + FlyStopSpeed;
+
+        s.Vel = horizontal ? new Vector2(back * v, 0f) : new Vector2(0f, back * v);
+        s.SettleTo = horizontal
+            ? new Vector2(restAxis, s.Pos.Y)
+            : new Vector2(s.Pos.X, restAxis);
+    }
+
+    void BeginSettle(SpawnAnim s)
+    {
+        s.Phase = SpawnPhase.Settle;
+        s.T = 0f;
+        s.SettleFrom = s.Pos;
+
+        // 撞过边的话落点已经在 RetargetBounce 里定成整格了，这里不用再动；
+        // 只有"一直没撞到边"的兜底路径才就地吸整格。
+        if (s.Retargeted) return;
+
+        var snapped = GameWindow.ClampToScreen(new Point(
+            GameWindow.GridRound((int)MathF.Round(s.Pos.X)),
+            GameWindow.GridRound((int)MathF.Round(s.Pos.Y))));
+        s.SettleTo = new Vector2(snapped.X, snapped.Y);
+    }
+
+    void UpdateSettle(SpawnAnim s, float dt)
+    {
+        s.T += dt;
+        float k = Math.Clamp(s.T / SettleTime, 0f, 1f);
+        float e = 1f - MathF.Pow(1f - k, 3f);   // ease-out：一上来就走，最后轻轻贴住
+        var p = Vector2.Lerp(s.SettleFrom, s.SettleTo, e);
+
+        s.Flying.SetClientOrigin(new Point((int)MathF.Round(p.X), (int)MathF.Round(p.Y)));
+        if (k >= 1f) FinishSpawn(s);
+    }
+
+    void FinishSpawn(SpawnAnim s)
+    {
+        var w = s.Flying;
+        w.SetClientOrigin(new Point((int)MathF.Round(s.SettleTo.X), (int)MathF.Round(s.SettleTo.Y)));
+        w.Spawning = false;
+        _spawn = null;
+
+        // 现在才把这块并进相邻关系/窗口组 —— 飞行途中一路都不提交，
+        // 所以撞过谁、擦过谁都不会被误判成"连上了"
         RefreshLayout();
-        if (!first && !_suppressSfx) Audio.Play(Sfx.WindowOpen);
+
+        // 演出期间被按下的那些 N，攒到这一刻接着演下一个
+        if (_spawnQueued)
+        {
+            _spawnQueued = false;
+            SpawnWindow();
+        }
     }
 
     /// <summary>把角色放到某块地图的出生点（注意取景框可能已经滚动过）。</summary>
@@ -263,6 +740,10 @@ internal sealed class Game
 
     public void RefreshLayout()
     {
+        // 新生窗口还在演（抖动/飞行）：这时候每帧都提交相邻关系，
+        // 飞到谁身上就当场"连上"了，光效和玩法都会炸。演出结束才提交一次。
+        if (_spawn != null) return;
+
         foreach (var w in Windows)
             w.NeighborLeft = w.NeighborRight = w.NeighborTop = w.NeighborBottom = null;
 
@@ -274,6 +755,7 @@ internal sealed class Game
             {
                 var a = Windows[i];
                 var b = Windows[j];
+                if (a.Spawning || b.Spawning) continue;   // 飞行中的窗口不参与相邻判定
                 var ra = a.ClientScreen;
                 var rb = b.ClientScreen;
 
@@ -307,7 +789,7 @@ internal sealed class Game
         int live = 0;
         foreach (var w in Windows)
         {
-            if (w.IsDisposed) continue;
+            if (w.IsDisposed || w.Spawning) continue;   // 飞行中的窗口不算进任何一组
             var r = w.ClientScreen;
             sb.Append(r.Left).Append(',').Append(r.Top).Append(';');
             live++;
@@ -323,7 +805,7 @@ internal sealed class Game
         var seen = new HashSet<GameWindow>();
         foreach (var seed in Windows)
         {
-            if (seed.IsDisposed || !seen.Add(seed)) continue;
+            if (seed.IsDisposed || seed.Spawning || !seen.Add(seed)) continue;
 
             var group = new WindowGroup();
             var queue = new Queue<GameWindow>();
@@ -337,7 +819,7 @@ internal sealed class Game
 
                 foreach (var other in Windows)
                 {
-                    if (other.IsDisposed || seen.Contains(other)) continue;
+                    if (other.IsDisposed || other.Spawning || seen.Contains(other)) continue;
                     if (!Touches(w.ClientScreen, other.ClientScreen)) continue;
                     seen.Add(other);
                     queue.Enqueue(other);
@@ -430,7 +912,6 @@ internal sealed class Game
         // 但"相邻关系"是玩法状态，只在松手时由 RefreshLayout 提交。
         SyncGroups();
 
-
         for (int i = SeamFlashes.Count - 1; i >= 0; i--)
         {
             var flash = SeamFlashes[i];
@@ -457,6 +938,8 @@ internal sealed class Game
             return;
         }
 
+        // 新生窗口的抖动/飞行先推进位置，后面的 RefreshLayout 才知道要不要真的提交
+        UpdateSpawn(dt);
         RefreshLayout();
 
         UpdateInput(dt);
