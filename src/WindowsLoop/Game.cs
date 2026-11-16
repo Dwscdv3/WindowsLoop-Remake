@@ -197,6 +197,21 @@ internal sealed class Game
 
         /// <summary>撞边时已经按"整格落点"反算过回弹初速，收尾不用再吸。</summary>
         public bool Retargeted;
+
+        /// <summary>
+        /// 蓄力音效的音量包络（0..1）。抖动幅度直接取"这一帧声音有多响"，
+        /// 所以素材里有几下起伏，窗口就抖几下 —— 不用手工对节拍。
+        /// </summary>
+        public float[]? Env;
+
+        /// <summary>蓄力要抖多久 = 蓄力音效的时长（读不到时用 <see cref="DefaultShakeTime"/>）。</summary>
+        public float ShakeTime = DefaultShakeTime;
+
+        /// <summary>蓄力音效只起播一次。</summary>
+        public bool Sounded;
+
+        /// <summary>上一帧的真实步长：撞边反算落点速度要用它。</summary>
+        public float LastDt = FixedDt;
     }
 
     SpawnAnim? _spawn;
@@ -207,9 +222,9 @@ internal sealed class Game
     /// <summary>正在演"新生窗口"。这期间不提交相邻关系、窗口也不接受拖动。</summary>
     public bool SpawnAnimating => _spawn != null;
 
-    const float ShakeTime = 1.0f;        // 抖多久
-    const float ShakeAmplitude = 8f;     // 抖到最大时偏移几像素
-    const float ShakeHz = 15f;           // 抖多快（取 15 = 60fps 的四分之一周期，画面不打架）
+    const float DefaultShakeTime = 1.0f;   // 读不到蓄力音效时长时的兜底
+    const float ShakeAmplitude = 8f;       // 抖到最大时偏移几像素
+    const float ShakeHz = 15f;             // 抖多快（取 15 = 60fps 的四分之一周期，画面不打架）
 
     /// <summary>
     /// 空气阻尼系数（就是"摩擦力"）。速度按 v *= exp(-k·dt) 等比衰减，自由行程 ≈ v0/k。
@@ -253,12 +268,21 @@ internal sealed class Game
     ///
     /// 选母体和方向**都不是随机**：全局取"到工作区边界余量最大"的那一个方向
     /// （见 <see cref="PickSpawnSite"/>），由拥有它的窗口组当母体。
+    ///
+    /// 窗口数已经到顶时不建窗口，改成演一次"憋喷嚏"（见 <see cref="BeginStifle"/>）。
     /// </summary>
     public void SpawnWindow()
     {
         if (Fading || Paused) return;                    // 换关过场 / 拖窗口时不演
         if (Windows.Count == 0) { OpenWindow(); return; }
-        if (Windows.Count >= Level.MaxWindows) return;
+
+        // 到上限了：不建窗口，让本来该吐的那个组憋一个喷嚏。
+        // 这时候不能再排进队列 —— 队列是"等这一场演完接着吐"，而这里已经吐不出东西了。
+        if (Windows.Count >= Level.MaxWindows)
+        {
+            if (_spawn == null && _stifle == null) BeginStifle();
+            return;
+        }
 
         // 上一次还没演完（一次只演一个）：记一笔，等它落地后再接着演，
         // 这样连按 N 不会只出来一个窗口，也不会两场动画抢同一批窗口
@@ -282,6 +306,13 @@ internal sealed class Game
         var anim = new SpawnAnim { Flying = window, Edge = edge, Dir = dir };
         foreach (var w in mother)
             if (!w.IsDisposed) anim.Group.Add((w, w.ClientScreen.Location));
+
+        // 蓄力音效决定两件事：抖多久、每一帧抖多厉害
+        float len = Audio.SfxLength(Sfx.Ahhh);
+        var env = Audio.SfxEnvelope(Sfx.Ahhh);
+        if (len > 0.05f) anim.ShakeTime = Math.Clamp(len, 0.3f, 5f);
+        if (env.Length > 0) anim.Env = env;
+
         _spawn = anim;
     }
 
@@ -458,10 +489,20 @@ internal sealed class Game
     void UpdateShake(SpawnAnim s, float dt)
     {
         s.T += dt;
-        float k = Math.Clamp(s.T / ShakeTime, 0f, 1f);
 
-        // 幅度按 k² 涨：前半秒只是细微的嗡，最后几帧明显在抖
-        float amp = ShakeAmplitude * k * k;
+        // 蓄力音效和抖动同一帧起，后面全靠包络对拍
+        if (!s.Sounded)
+        {
+            s.Sounded = true;
+            Audio.Play(Sfx.Ahhh);
+        }
+
+        // 抖多厉害 = 这一帧蓄力音效有多响。读不到包络才退回原来的 k² 曲线：
+        // 前半段只是细微的嗡，最后几帧明显在抖。
+        float amp = s.Env != null
+            ? ShakeAmplitude * EnvelopeAt(s.Env, s.T)
+            : ShakeAmplitude * MathF.Pow(Math.Clamp(s.T / s.ShakeTime, 0f, 1f), 2f);
+
         float phase = s.T * ShakeHz * MathF.Tau;
 
         // 整组共用同一个偏移，不是各自抖：拼在一起的两块地图必须一起动，
@@ -477,7 +518,7 @@ internal sealed class Game
         // 新窗口全程跟着"冒出来的那一块"，被压在它下面所以看不见
         s.Flying.SetClientOrigin(s.Edge.ClientScreen.Location);
 
-        if (s.T >= ShakeTime) BeginFly(s);
+        if (s.T >= s.ShakeTime) BeginFly(s);
     }
 
     void BeginFly(SpawnAnim s)
@@ -517,12 +558,28 @@ internal sealed class Game
         float v0 = MathF.Max((dist + FlyRunOut) * FlyDrag, 600f);
         s.Vel = s.Dir * v0;
 
-        Audio.Play(Sfx.WindowOpen);   // 窗口真出来的这一声，和画面同一帧
+        Audio.Play(Sfx.Choo);   // 窗口真出来的这一声，和画面同一帧
     }
+
+    /// <summary>包络查表（线性插值；越界取两端）。</summary>
+    static float EnvelopeAt(float[] env, float t)
+    {
+        if (env.Length == 0) return 0f;
+        if (t <= 0f) return env[0];
+        float x = t * EnvRate;
+        int i = (int)x;
+        if (i >= env.Length - 1) return env[^1];
+        float f = x - i;
+        return env[i] * (1f - f) + env[i + 1] * f;
+    }
+
+    /// <summary>包络采样率，必须和 <see cref="AudioManager.SfxEnvelope"/> 的默认值一致。</summary>
+    const int EnvRate = 100;
 
     void UpdateFly(SpawnAnim s, float dt)
     {
         s.T += dt;
+        s.LastDt = dt;
 
         s.Pos += s.Vel * dt;
         s.Vel *= MathF.Exp(-FlyDrag * dt);   // 空气阻尼：速度指数衰减，位移自然收尾
@@ -560,6 +617,8 @@ internal sealed class Game
     {
         s.Retargeted = true;
 
+        Audio.Play(Sfx.Bump);   // "咚" —— 撞上屏幕边的那一下
+
         bool horizontal = s.Dir.X != 0;
         float posAxis = horizontal ? s.Pos.X : s.Pos.Y;
 
@@ -570,9 +629,12 @@ internal sealed class Game
         // 离散积分下，速度从 v 衰减到 FlyStopSpeed 期间走过的距离是
         //   dt · (v - FlyStopSpeed) / (1 - r)，  r = exp(-k·dt)
         // 反解出 v：这样"最后一帧速度掉到停速"的那一刻，位置正好压在 restAxis 上。
-        float r = MathF.Exp(-FlyDrag * FixedDt);
+        // 撞边时的反算要用**当前这一帧的真实步长**：动画现在按真实帧时长推进，
+        // 步长不固定了，写死 FixedDt 会让落点算偏
+        float dt = MathF.Max(s.LastDt, 1f / 1000f);
+        float r = MathF.Exp(-FlyDrag * dt);
         float run = MathF.Abs(restAxis - posAxis);
-        float v = run * (1f - r) / FixedDt + FlyStopSpeed;
+        float v = run * (1f - r) / dt + FlyStopSpeed;
 
         s.Vel = horizontal ? new Vector2(back * v, 0f) : new Vector2(0f, back * v);
         s.SettleTo = horizontal
@@ -624,6 +686,165 @@ internal sealed class Game
             _spawnQueued = false;
             SpawnWindow();
         }
+    }
+
+    // ── 到上限时的"憋喷嚏" ────────────────────────────────────────────────
+
+    /// <summary>窗口数到顶时，母体组想吐但吐不出来。</summary>
+    sealed class StifleAnim
+    {
+        public float T;
+
+        /// <summary>母体组的每一块，以及它抖动前的位置。</summary>
+        public readonly List<(GameWindow Window, Point Origin)> Group = new();
+
+        /// <summary>本来要吐的方向：抖得越狠越往这边顶。</summary>
+        public Vector2 Dir;
+
+        /// <summary>素材只起播一次。</summary>
+        public bool Sounded;
+
+        /// <summary>连续"啊"的音量包络：有几声"啊"，窗口就抖几下。</summary>
+        public float[]? Env;
+
+        /// <summary>素材时长；0 表示读不出来，退回固定节奏。</summary>
+        public float AudioLength;
+
+        /// <summary>整段演出时长（素材 + 泄气尾巴）。</summary>
+        public float Total;
+    }
+
+    StifleAnim? _stifle;
+
+    // 下面这组只在"读不到素材"时兜底用
+    const float StifleBuild = 0.60f;
+    const float StifleHold = 0.14f;
+    const float StifleFall = 0.32f;
+
+    const float StifleAmplitude = 10f;  // 抖到最狠时的像素数
+    const float StifleStrain = 9f;      // 朝出口顶出去的最大像素数
+    const float StifleDeflate = 0.30f;  // 声音停了之后泄气的时长
+
+    /// <summary>窗口正在演动画（新生 / 憋喷嚏）。这期间不拖动、不提交相邻关系。</summary>
+    public bool WindowAnimBusy => _spawn != null || _stifle != null;
+
+    /// <summary>
+    /// 窗口数已经到顶时按 N（或菜单、双击程序）：让本来该吐的那个组**想吐但吐不出来**。
+    ///
+    /// 抖动完全跟着音效走：素材里有几声"啊"，整组就一下一下往上顶几次，
+    /// 声音停了才泄气松下来。玩家看到的不是"按键没反应"，是"它想吐，吐不出来"。
+    ///
+    /// 全程只挪位置，不建窗口。
+    /// </summary>
+    void BeginStifle()
+    {
+        SyncGroups();   // 母体和方向都按这一帧的真实布局挑，和真吐的时候同一套规则
+        if (!PickSpawnSite(out var mother, out _, out var dir)) return;
+
+        var anim = new StifleAnim { Dir = dir };
+
+        float len = Audio.SfxLength(Sfx.CantOpen);
+        var env = Audio.SfxEnvelope(Sfx.CantOpen);
+        if (len > 0.05f && env.Length > 0)
+        {
+            anim.Env = env;
+            anim.AudioLength = len;
+            anim.Total = len + StifleDeflate;
+        }
+        else
+        {
+            anim.Total = StifleBuild + StifleHold + StifleFall;
+        }
+
+        foreach (var w in mother)
+            if (!w.IsDisposed) anim.Group.Add((w, w.ClientScreen.Location));
+
+        _stifle = anim;
+    }
+
+    void UpdateStifle(float dt)
+    {
+        var s = _stifle;
+        if (s == null) return;
+
+        s.T += dt;
+
+        if (!s.Sounded)
+        {
+            s.Sounded = true;
+            Audio.Play(Sfx.CantOpen);   // 和抖动同一帧起
+        }
+
+        float amp;
+        float toward = 0f;   // 朝吐出方向"顶"出去多少像素
+        if (s.Env != null)
+        {
+            float e = EnvelopeAt(s.Env, s.T);
+            if (s.T > s.AudioLength)
+            {
+                // 声音停了：整组泄气松回原位
+                float c = Math.Clamp((s.T - s.AudioLength) / StifleDeflate, 0f, 1f);
+                e *= (1f - c) * (1f - c);
+            }
+            amp = StifleAmplitude * e;
+            toward = StifleStrain * e;
+        }
+        else
+        {
+            // 兜底：读不到素材时用固定节奏（爬升 → 僵住 → 泄气）
+            float hold = StifleBuild + StifleHold;
+            if (s.T < StifleBuild)
+            {
+                float k = s.T / StifleBuild;
+                float wave = 0.62f + 0.38f * MathF.Sin(s.T * 2f * MathF.PI * 2.6f - MathF.PI / 2f);
+                amp = StifleAmplitude * k * k * wave;
+            }
+            else if (s.T < hold)
+            {
+                amp = StifleAmplitude;
+                toward = StifleStrain;
+            }
+            else
+            {
+                float c = Math.Clamp((s.T - hold) / StifleFall, 0f, 1f);
+                amp = StifleAmplitude * (1f - c) * (1f - c);
+                toward = StifleStrain * (1f - c);
+            }
+        }
+
+        float phase = s.T * ShakeHz * MathF.Tau;
+        var off = new Point(
+            (int)MathF.Round(amp * MathF.Sin(phase) + s.Dir.X * toward),
+            (int)MathF.Round(amp * 0.72f * MathF.Cos(phase) + s.Dir.Y * toward));
+
+        foreach (var (w, origin) in s.Group)
+            if (!w.IsDisposed) w.SetClientOrigin(new Point(origin.X + off.X, origin.Y + off.Y));
+
+        if (s.T < s.Total) return;
+
+        // 收尾必须分毫不差地放回原处：差几像素，拼缝的两块地图就错开了
+        foreach (var (w, origin) in s.Group)
+            if (!w.IsDisposed) w.SetClientOrigin(origin);
+
+        _stifle = null;
+        RefreshLayout();
+    }
+
+    /// <summary>
+    /// 窗口动画（抖动 / 飞行 / 收尾）单独按**真实帧时长**推进，不跟着 60Hz 的物理步走。
+    ///
+    /// 这些动画只改变窗口位置、不改变窗口内容，所以可以跑得比物理快得多：
+    /// 主循环每转一圈调一次（配合 <see cref="Program"/> 里动画期间缩短的等待时间），
+    /// 而重绘仍然只在物理步推进时做。位移本身只是一次 SetWindowPos，很便宜。
+    /// </summary>
+    public void UpdateWindowAnimations(float dt)
+    {
+        if (dt <= 0f) return;
+        UpdateSpawn(dt);
+        UpdateStifle(dt);
+
+        // 窗口组的光效跟着实际位置走，否则高刷位移时光晕会滞后半帧
+        if (WindowAnimBusy) SyncGroups();
     }
 
     /// <summary>把角色放到某块地图的出生点（注意取景框可能已经滚动过）。</summary>
@@ -748,9 +969,9 @@ internal sealed class Game
 
     public void RefreshLayout()
     {
-        // 新生窗口还在演（抖动/飞行）：这时候每帧都提交相邻关系，
+        // 窗口动画还在演（新生抖动/飞行、憋喷嚏）：这时候每帧都提交相邻关系，
         // 飞到谁身上就当场"连上"了，光效和玩法都会炸。演出结束才提交一次。
-        if (_spawn != null) return;
+        if (WindowAnimBusy) return;
 
         foreach (var w in Windows)
             w.NeighborLeft = w.NeighborRight = w.NeighborTop = w.NeighborBottom = null;
@@ -946,8 +1167,8 @@ internal sealed class Game
             return;
         }
 
-        // 新生窗口的抖动/飞行先推进位置，后面的 RefreshLayout 才知道要不要真的提交
-        UpdateSpawn(dt);
+        // 窗口动画（抖动/飞行）不在这里推进 —— 它们由 UpdateWindowAnimations 按
+        // 真实帧时长独立驱动，可以跑得比 60Hz 的物理步更密。这里只负责提交布局。
         RefreshLayout();
 
         UpdateInput(dt);

@@ -65,8 +65,14 @@ internal static class Program
         game.Init();
         game.Audio.Start();
         StartPipeServer(game);
+        // 1ms 计时器精度：默认 15.6ms 会让每次等待都超时，整圈被拉到 20ms（50fps）
+        Native.TimeBeginPeriod(1);
         try { RunLoop(game); }
-        finally { game.Audio.Dispose(); }
+        finally
+        {
+            Native.TimeEndPeriod(1);
+            game.Audio.Dispose();
+        }
     }
 
     /// <summary>关卡用 --level &lt;名字&gt; 或环境变量 WL_LEVEL 指定，默认进 main（关卡选择地图）。</summary>
@@ -138,43 +144,91 @@ internal static class Program
         catch { }
     }
 
+    /// <summary>WL_TRACE_FPS=1 时把整圈/重绘/物理的耗时写进临时目录，用来定位掉帧在哪一段。</summary>
+    static readonly bool TraceFps = Environment.GetEnvironmentVariable("WL_TRACE_FPS") == "1";
+
     static void RunLoop(Game game)
     {
         var clock = Stopwatch.StartNew();
         double last = clock.Elapsed.TotalSeconds;
         double accumulator = 0;
 
+        // 统计用
+        int frames = 0, stepsTotal = 0;
+        double paintMs = 0, stepMs = 0, msgMs = 0, loopMs = 0, statFrom = 0;
+
         while (game.Running)
         {
             try
             {
+                double loopStart = clock.Elapsed.TotalSeconds;
+
                 DrainMessages(game);
                 if (!game.Running) break;
                 game.PumpActions();
 
                 double now = clock.Elapsed.TotalSeconds;
+                double frameDt = Math.Min(now - last, 0.05);
                 accumulator += Math.Min(now - last, 0.25);
                 last = now;
+                msgMs += (now - loopStart) * 1000.0;
 
                 int steps = 0;
+                double stepT0 = clock.Elapsed.TotalSeconds;
                 while (accumulator >= Game.FixedDt && steps < 5)
                 {
                     game.Step(Game.FixedDt);
                     accumulator -= Game.FixedDt;
                     steps++;
                 }
+                stepMs += (clock.Elapsed.TotalSeconds - stepT0) * 1000.0;
+                stepsTotal += steps;
 
-                foreach (var window in game.Windows.ToArray())
+                // 抖动/飞行只改位置，不跟物理步走
+                game.UpdateWindowAnimations((float)frameDt);
+
+                double paintT0 = clock.Elapsed.TotalSeconds;
+                // 窗口动画只改位置、不改内容，所以动画期间只在物理步推进时重绘（60Hz），
+                // 余下的每一圈只更新位置 —— 一帧重绘要 5ms 上下，不这样限就没法提高位移频率
+                bool needPaint = !game.WindowAnimBusy || steps > 0;
+                if (needPaint)
                 {
-                    if (window.IsDisposed) continue;
-                    window.Invalidate();
-                    window.Update();
+                    foreach (var window in game.Windows.ToArray())
+                    {
+                        if (window.IsDisposed) continue;
+                        window.Invalidate();
+                        window.Update();
+                    }
                 }
+                paintMs += (clock.Elapsed.TotalSeconds - paintT0) * 1000.0;
 
                 Heartbeat(game);
 
-                int waitMs = (int)Math.Clamp((Game.FixedDt - accumulator) * 1000.0 - 1.0, 0, 16);
+                // 窗口动画期间把等待压到 2ms（≈300Hz 位移更新）；平时按物理步对齐，省 CPU
+                int waitMs = game.WindowAnimBusy
+                    ? 2
+                    : (int)Math.Clamp((Game.FixedDt - accumulator) * 1000.0 - 1.0, 0, 16);
                 Native.MsgWaitForMultipleObjects(0, null, false, (uint)waitMs, Native.QS_ALLINPUT);
+
+                frames++;
+                loopMs += (clock.Elapsed.TotalSeconds - loopStart) * 1000.0;
+
+                if (TraceFps && clock.Elapsed.TotalSeconds - statFrom >= 2.0)
+                {
+                    double span = clock.Elapsed.TotalSeconds - statFrom;
+                    statFrom = clock.Elapsed.TotalSeconds;
+                    try
+                    {
+                        File.AppendAllText(Path.Combine(Path.GetTempPath(), "windowsloop-fps.log"),
+                            $"[{DateTime.Now:HH:mm:ss}] loop={frames / span:F1}fps  " +
+                            $"整圈={loopMs / frames:F1}ms 消息={msgMs / frames:F1}ms " +
+                            $"物理={stepMs / frames:F1}ms 重绘={paintMs / frames:F1}ms 窗口={game.Windows.Count} " +
+                            $"物理步/圈={(double)stepsTotal / frames:F2}\r\n");
+                    }
+                    catch { }
+                    frames = 0; stepsTotal = 0;
+                    paintMs = stepMs = msgMs = loopMs = 0;
+                }
             }
             catch (Exception ex)
             {

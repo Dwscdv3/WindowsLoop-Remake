@@ -121,6 +121,18 @@ internal static class Native
     /// <summary>顺着 Z 序往下走的那一步。</summary>
     public const uint GW_HWNDNEXT = 0x0002;
 
+    // ── 计时器精度 ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 把系统计时器精度提到 1ms。默认是 15.6ms —— 主循环请求睡 11ms 实际会睡 15.6ms，
+    /// 整圈就被拉到 20ms（50fps），这是"连 60 帧都不到"的直接原因。
+    /// </summary>
+    [DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
+    public static extern uint TimeBeginPeriod(uint uMilliseconds);
+
+    [DllImport("winmm.dll", EntryPoint = "timeEndPeriod")]
+    public static extern uint TimeEndPeriod(uint uMilliseconds);
+
     public const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOACTIVATE = 0x0010;
 
 

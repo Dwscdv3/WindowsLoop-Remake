@@ -3,12 +3,20 @@ using NAudio.Wave.SampleProviders;
 
 namespace WindowsLoop;
 
-/// <summary>一次性音效事件：原版四类 + 窗口拼接相关事件。</summary>
+/// <summary>一次性音效事件：原版四类 + 窗口拼接 / 新生窗口相关事件。</summary>
 internal enum Sfx
 {
     Jump, Land, Gem,
     WindowOpen, Snap, Release, Transfer,
     Win,
+    /// <summary>新窗口撞到屏幕边的那一声。</summary>
+    Bump,
+    /// <summary>吐出窗口前的蓄力"啊——"。</summary>
+    Ahhh,
+    /// <summary>窗口飞出去的那一记"啾"。</summary>
+    Choo,
+    /// <summary>窗口数到顶、开不出新窗口时的连续"啊"。</summary>
+    CantOpen,
 }
 
 /// <summary>
@@ -31,6 +39,17 @@ internal sealed class AudioManager : IDisposable
     const string LandName = "Land 4";
     const string GemName = "Game Item 32";
     const string AltName = "walk-loop";
+
+    /// <summary>
+    /// 窗口动作的音效。whoosh / bump 是 tools/gen_window_sfx.py 合成的；
+    /// 三段喷嚏是从 Tom 猫视频里人工切出来的（见 tools/sfx-cutter.html），
+    /// 哪段放哪个动作由文件名决定，换素材只要替换同名文件。
+    /// </summary>
+    const string WhooshName = "whoosh";
+    const string BumpName = "bump";
+    const string AhhhName = "sneeze-ahhh";                 // 吐出前的蓄力
+    const string ChooName = "sneeze-choo";                 // 窗口飞出去
+    const string CantOpenName = "sneeze-ah-ah-ahah-ahh-ahah"; // 到上限时的连续"啊"
 
     const float BgmVolume = 0.34f;
 
@@ -58,11 +77,18 @@ internal sealed class AudioManager : IDisposable
         // 落地：判定在贴地边缘偶尔会连触，0.3s 内的重复直接不播（只留第一声）
         [Sfx.Land] = (LandName, 0.62f, 0f, true, 0.3f),
         [Sfx.Gem] = (GemName, 0.90f, 0f, false, 0f),
-        [Sfx.WindowOpen] = (AltName, 0.30f, 0.30f, false, 0f),
+        [Sfx.WindowOpen] = (WhooshName, 0.50f, 0.45f, false, 0f),
         [Sfx.Snap] = (JumpName, 0.38f, 0.16f, true, 0.05f),
         [Sfx.Release] = (LandName, 0.30f, 0.16f, true, 0.05f),
         [Sfx.Transfer] = (AltName, 0.42f, 0.28f, false, 0f),
         [Sfx.Win] = (GemName, 1.00f, 0f, false, 0f),
+        // 撞屏幕边：一声就够，重复触发直接忽略。
+        // 音量 0.84 —— 对齐试听时的响度：RMS 比 choo 高约 2dB，压在尾音上也听得清
+        [Sfx.Bump] = (BumpName, 0.84f, 0.35f, true, 0.05f),
+        // 蓄力 / 飞出 / 开不出新窗口：素材本身没有爆音，别截断
+        [Sfx.Ahhh] = (AhhhName, 0.85f, 0f, false, 0f),
+        [Sfx.Choo] = (ChooName, 0.95f, 0f, false, 0f),
+        [Sfx.CantOpen] = (CantOpenName, 0.80f, 0f, false, 0f),
     };
 
     WasapiPlayer? _output;
@@ -71,6 +97,155 @@ internal sealed class AudioManager : IDisposable
     float _master = 0.85f;
     bool _muted, _disposed;
     float _walkLevel, _walkTarget;
+
+    /// <summary>
+    /// 测试用：把某个音效按**游戏里实际的音量**完整读一遍，回报峰值/RMS。
+    /// 用来排查"代码调了但没有声音"——如果这里读出来是静音，问题在素材或解析；
+    /// 如果读出来电平正常，那就只剩播放时机和混音环境的问题。
+    /// </summary>
+    public (float PeakDb, float Rms, float Seconds, string Note) ProbeSfx(Sfx sfx)
+    {
+        if (!_map.TryGetValue(sfx, out var cfg)) return (0f, 0f, 0f, "没在 _map 里注册");
+        string? path = Resolve(cfg.Name);
+        if (path == null) return (0f, 0f, 0f, $"找不到素材 {cfg.Name}");
+
+        Voice voice;
+        try { voice = new Voice(path, false, Math.Max(0.0001f, cfg.Volume), MixFormat); }
+        catch (Exception ex) { return (0f, 0f, 0f, "解码失败 " + ex.GetType().Name); }
+
+        try
+        {
+            var buf = new float[4096];
+            double sum = 0;
+            float peak = 0f;
+            long count = 0;
+            int read;
+            while ((read = voice.Volume.Read(buf.AsSpan())) > 0)
+            {
+                for (int i = 0; i < read; i++)
+                {
+                    float a = MathF.Abs(buf[i]);
+                    if (a > peak) peak = a;
+                    sum += buf[i] * (double)buf[i];
+                }
+                count += read;
+            }
+
+            int channels = Math.Max(1, voice.Volume.WaveFormat.Channels);
+            float seconds = count / (float)(MixFormat.SampleRate * channels);
+            float peakDb = peak > 0 ? 20f * MathF.Log10(peak) : -999f;
+            float rms = count > 0 ? (float)Math.Sqrt(sum / count) : 0f;
+            return (peakDb, rms, seconds, Path.GetFileName(path));
+        }
+        finally { voice.Dispose(); }
+    }
+
+    /// <summary>
+    /// 某个音效素材的时长（秒）；找不到或读不出来返回 0。
+    /// 用来把音效对齐到动画节拍（换素材之后不用改代码）。
+    /// </summary>
+    public float SfxLength(Sfx sfx)
+    {
+        if (_lengthCache.TryGetValue(sfx, out float cached)) return cached;
+
+        float len = 0f;
+        if (_map.TryGetValue(sfx, out var cfg))
+        {
+            string? path = Resolve(cfg.Name);
+            if (path != null)
+            {
+                try
+                {
+                    using var reader = new MediaFoundationReader(path);
+                    len = (float)(reader.Length / (double)Math.Max(1, reader.WaveFormat.AverageBytesPerSecond));
+                }
+                catch { }
+            }
+        }
+
+        _lengthCache[sfx] = len;
+        return len;
+    }
+
+    readonly Dictionary<Sfx, float> _lengthCache = new();
+    readonly Dictionary<Sfx, float[]> _envCache = new();
+
+    /// <summary>
+    /// 音效的音量包络（0..1，每秒 <paramref name="perSecond"/> 格）。
+    /// 窗口抖动的强弱直接查这张表，于是素材里有几下"啊"、抖就几下 ——
+    /// 换素材不用改一行代码。启动时在 <see cref="Start"/> 里预热，动画期间零开销。
+    /// </summary>
+    public float[] SfxEnvelope(Sfx sfx, int perSecond = 100)
+    {
+        if (_envCache.TryGetValue(sfx, out var cached)) return cached;
+
+        var result = Array.Empty<float>();
+        if (_map.TryGetValue(sfx, out var cfg))
+        {
+            string? path = Resolve(cfg.Name);
+            if (path != null)
+            {
+                try
+                {
+                    using var reader = new MediaFoundationReader(path);
+                    ISampleProvider src = new SampleChannel(reader, false);
+                    if (src.WaveFormat.Channels == 1) src = new MonoToStereoSampleProvider(src);
+
+                    int sr = src.WaveFormat.SampleRate;
+                    int cell = Math.Max(1, sr / perSecond) * Math.Max(1, src.WaveFormat.Channels);
+
+                    var values = new List<float>(512);
+                    var buf = new float[4096];
+                    double sum = 0; int n = 0;
+                    int read;
+                    while ((read = src.Read(buf.AsSpan())) > 0)
+                    {
+                        for (int i = 0; i < read; i++)
+                        {
+                            sum += buf[i] * (double)buf[i];
+                            if (++n < cell) continue;
+                            values.Add((float)Math.Sqrt(sum / n));
+                            sum = 0; n = 0;
+                        }
+                    }
+
+                    if (values.Count > 0)
+                    {
+                        float max = 0.0001f;
+                        foreach (var v in values) if (v > max) max = v;
+
+                        // 过门槛才算数：素材里"不够响"的段落直接当 0，窗口就别抖了。
+                        // 不过门槛的话，气声的小起伏也会被放大成肉眼可见的位移。
+                        const float Threshold = 0.40f;
+
+                        var env = new float[values.Count];
+                        for (int i = 0; i < env.Length; i++)
+                        {
+                            float above = (values[i] / max - Threshold) / (1f - Threshold);
+                            env[i] = above > 0f ? above : 0f;
+                        }
+
+                        // 两遍三点平滑，幅度不会一格一跳（也会把门槛边缘磨软成 30ms 的斜坡）
+                        for (int pass = 0; pass < 2; pass++)
+                        {
+                            float prev = env[0];
+                            for (int i = 1; i < env.Length; i++)
+                            {
+                                float cur = env[i];
+                                env[i] = (prev + cur * 2f) / 3f;
+                                prev = cur;
+                            }
+                        }
+                        result = env;
+                    }
+                }
+                catch { }
+            }
+        }
+
+        _envCache[sfx] = result;
+        return result;
+    }
 
     public bool Muted => _muted;
     public string AudioDir => _dir;
@@ -115,6 +290,12 @@ internal sealed class AudioManager : IDisposable
 
         _bgm = TryOpen(Resolve(BgmName) ?? Resolve("bgm"), loop: true, BgmVolume);
         _walk = TryOpen(Resolve(WalkName), loop: true, 0f);
+
+        // 预热三个"动作音效"的包络：素材都只有零点几到两三秒，解码一遍是毫秒级，
+        // 换到这里做，动画开始时就不用临时算
+        SfxEnvelope(Sfx.Ahhh);
+        SfxEnvelope(Sfx.Choo);
+        SfxEnvelope(Sfx.CantOpen);
     }
 
     Voice? TryOpen(string? path, bool loop, float volume)
@@ -338,6 +519,7 @@ internal static class AudioSelfTest
             "windows-loop-bgm - final-fixed", "bgm",
             "walk-gravel-loop-200bpm", "walk-loop",
             "Land 1", "Land 4", "Game Item 32",
+            "whoosh", "bump", "sneeze-ahhh", "sneeze-choo", "sneeze-ah-ah-ahah-ahh-ahah",
         };
         foreach (string name in names)
         {
@@ -357,6 +539,22 @@ internal static class AudioSelfTest
                 lines.Add($"{Path.GetFileName(path)}: FAIL {ex.GetType().Name}: {ex.Message}");
             }
         }
+
+        // 按游戏里的实际音量把几个新音效完整读一遍：核对"代码调了但听不见"到底是素材、
+        // 音量还是时机的问题
+        foreach (var (sfx, label) in new[]
+                 {
+                     (Sfx.WindowOpen, "WindowOpen/吐出"),
+                     (Sfx.Bump, "Bump/撞边"),
+                     (Sfx.Ahhh, "Ahhh/蓄力"),
+                     (Sfx.Choo, "Choo/飞出"),
+                     (Sfx.CantOpen, "CantOpen/开不出"),
+                 })
+        {
+            var (peakDb, rms, sec, note) = am.ProbeSfx(sfx);
+            lines.Add($"{label}: {note} 峰值={peakDb:F1}dBFS rms={rms:F3} 时长={sec:F2}s");
+        }
+
         File.WriteAllLines(Path.Combine(Path.GetTempPath(), "windowsloop-audio-selftest.txt"), lines);
     }
 
