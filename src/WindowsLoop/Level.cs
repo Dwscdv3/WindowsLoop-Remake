@@ -177,12 +177,6 @@ internal sealed class Piece
         int wy = ((y % Height) + Height) % Height;
         return Dim[wy * Width + wx] != 0;
     }
-
-    public bool ClimbAt(float x, float y) =>
-        TileSet.Defs[At((int)MathF.Floor(x), (int)MathF.Floor(y))].Climb;
-
-    public bool SpringAt(float x, float y) =>
-        TileSet.Defs[At((int)MathF.Floor(x), (int)MathF.Floor(y))].Spring;
 }
 
 /// <summary>

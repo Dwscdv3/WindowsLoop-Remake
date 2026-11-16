@@ -1216,8 +1216,118 @@ internal sealed class Game
         }
     }
 
+    // ── 碰撞：一律按「拼接之后的整体」判定 ────────────────────────────────
+    //
+    // 口径只有一条：角色身上每一格，先问"这一格在拼接后的整体里由哪块窗口盖着"，
+    // 再查那块窗口自己的地图。整组窗口都没盖到的地方 —— 也就是拼接之后的最外边界之外 ——
+    // 才算看不见的墙。
+    //
+    // 以前的写法是两段并行：先拿 Player.Piece 查整个 AABB，再拿 AABB 的四个角去问邻窗。
+    // 前者在跨缝时会把越界的那半格按环形**绕回自己地图的另一头**（一块 15x10 的地图，
+    // x=15 就是 x=0），于是"窗口外那圈看不见的区域"照样在挡人：明明接缝对面是空地，
+    // 却因为自己地图另一头是墙而被挡住；反过来对面是墙、自己另一头是空地时又会穿墙进去。
+
+    /// <summary>
+    /// 把地图坐标上的一个点，解析成「拼接后的整体」里的那一格：属于哪张地图、地图上的哪一格。
+    /// 这是整套碰撞判定的唯一口径。
+    /// </summary>
+    /// <returns>false = 这个点落在所有窗口之外（拼接后的外边界之外）。</returns>
+    bool TryResolvePoint(GameWindow owner, float mapX, float mapY, out Piece piece, out int mx, out int my)
+    {
+        float vx = mapX - owner.CamX, vy = mapY - owner.CamY;
+
+        // 1) 自己这块窗口盖着：直接就是自己地图上的那一格
+        if (InView(new Vector2(vx, vy)))
+        {
+            piece = owner.Piece;
+            mx = (int)MathF.Floor(mapX);
+            my = (int)MathF.Floor(mapY);
+            return true;
+        }
+
+        // 2) 同组里别的窗口盖着：换算到对方的画面坐标，再取对方地图上的那一格。
+        //
+        // 认"整组"而不是"上下左右那四块"：四块窗口交汇的那个点上，角色的 AABB
+        // 会顺带压到斜对角那块窗口的地盘，只认直接相邻的话那一格会被当成墙 ——
+        // 又在交汇处凭空多出一小块看不见的阻挡。
+        // 组内成员按定义互不重叠（重叠的窗口不算贴合，不会同组），所以不会有歧义。
+        var group = owner.Group?.Windows;
+        if (group != null)
+        {
+            for (int i = 0; i < group.Count; i++)
+            {
+                var other = group[i];
+                if (other == owner || other.IsDisposed) continue;
+                if (TryMapTo(other, owner, vx, vy, out piece, out mx, out my)) return true;
+            }
+        }
+        else
+        {
+            // 组还没建出来时的兜底（窗口组在 Step 开头才重建）：退回直接相邻的那几块
+            foreach (var other in owner.Neighbors)
+            {
+                if (other.IsDisposed) continue;
+                if (TryMapTo(other, owner, vx, vy, out piece, out mx, out my)) return true;
+            }
+        }
+
+        piece = null!;
+        mx = my = 0;
+        return false;
+    }
+
+    /// <summary>把 owner 画面上的点换算到 other 的画面里；落进对方框内就换成对方地图上的一格。</summary>
+    static bool TryMapTo(GameWindow other, GameWindow owner, float vx, float vy,
+        out Piece piece, out int mx, out int my)
+    {
+        var off = ViewOffset(owner, other);
+        float tx = vx - off.X, ty = vy - off.Y;
+
+        if (!InView(new Vector2(tx, ty)))
+        {
+            piece = null!;
+            mx = my = 0;
+            return false;
+        }
+
+        piece = other.Piece;
+        mx = (int)MathF.Floor(other.CamX + tx);
+        my = (int)MathF.Floor(other.CamY + ty);
+        return true;
+    }
+
+    /// <summary>
+    /// 拼接后的整体里，这一格挡不挡四面。整组窗口之外一律算挡 —— 那就是整片拼接形状的外边界。
+    /// </summary>
+    bool SolidInSplice(GameWindow owner, int mx, int my) =>
+        // 拿格中心去问：中心落在哪块窗口里，就查那块窗口地图上的那一格
+        !TryResolvePoint(owner, mx + 0.5f, my + 0.5f, out var piece, out int px, out int py)
+        || piece.SolidAt(px, py);
+
+    /// <summary>拼接后的整体里，这一格是不是单向平台。</summary>
+    bool PlatformInSplice(GameWindow owner, int mx, int my) =>
+        TryResolvePoint(owner, mx + 0.5f, my + 0.5f, out var piece, out int px, out int py)
+        && piece.PlatformAt(px, py);
+
+    /// <summary>
+    /// 角色所在（或脚下 <paramref name="dy"/> 格处）那一格的瓦片定义。
+    /// 梯子、弹簧这类"这一格是什么地形"的判定都走这里 —— 和碰撞同一个口径，
+    /// 接缝上不会再按环形绕回自己地图的另一头。
+    /// </summary>
+    TileDef? CellDefAtPlayer(float dy = 0f)
+    {
+        var w = WindowFor(Player.Piece);
+        if (w == null) return null;
+        if (!TryResolvePoint(w, Player.Pos.X, Player.Pos.Y + dy, out var piece, out int mx, out int my))
+            return null;
+        return TileSet.Defs[piece.At(mx, my)];
+    }
+
     bool Collides(Vector2 pos)
     {
+        var w = WindowFor(Player.Piece);
+        if (w == null) return true;   // 这张地图没有窗口显示：整块都不算存在
+
         float l = pos.X - Player.Width / 2f, r = pos.X + Player.Width / 2f;
         float t = pos.Y - Player.Height / 2f, b = pos.Y + Player.Height / 2f;
 
@@ -1226,15 +1336,7 @@ internal sealed class Game
 
         for (int y = y0; y <= y1; y++)
             for (int x = x0; x <= x1; x++)
-                if (Player.Piece.SolidAt(x, y)) return true;
-
-        // 取景框之外：那块有邻窗就放行（跨过去后交接），没有就是看不见的墙
-        var w = WindowFor(Player.Piece);
-        if (w == null) return true;
-
-        if (!InsideSomeWindow(w, l, t) || !InsideSomeWindow(w, r - 0.0001f, t) ||
-            !InsideSomeWindow(w, l, b - 0.0001f) || !InsideSomeWindow(w, r - 0.0001f, b - 0.0001f))
-            return true;
+                if (SolidInSplice(w, x, y)) return true;
 
         return false;
     }
@@ -1251,11 +1353,14 @@ internal sealed class Game
     ///     只要跳得够高、脚底越过顶面，落回来就踩在上面（跳不够高则会从平台里掉回去，符合预期）；
     ///   · 横向走过 —— 横向也用 <see cref="Collides"/>，侧面不挡。
     ///
-    /// 每一步位移被钳在 0.2 格以内，所以一次只会跨过至多一格，不会漏检穿透。
+    /// 平台同样按拼接后的整体查（<see cref="PlatformInSplice"/>）：接缝对面的平台照样接得住人。
     /// </summary>
     bool CollidesFalling(Vector2 pos, float feetBefore)
     {
         if (Collides(pos)) return true;
+
+        var w = WindowFor(Player.Piece);
+        if (w == null) return true;
 
         float l = pos.X - Player.Width / 2f, r = pos.X + Player.Width / 2f;
         float feet = pos.Y + Player.Height / 2f;
@@ -1269,18 +1374,23 @@ internal sealed class Game
             // 脚底本来就在这块平台的顶面之下 → 让它穿过去，别把人从平台里顶出来
             if (feetBefore > y + PlatformEps) continue;
             for (int x = x0; x <= x1; x++)
-                if (Player.Piece.PlatformAt(x, y)) return true;
+                if (PlatformInSplice(w, x, y)) return true;
         }
 
         return false;
     }
 
+    /// <summary>
+    /// 这个地图坐标点是不是还落在"走得到"的那片区域里（自己 + 直接相邻的窗口）。
+    ///
+    /// 只用于拖完窗口之后判断"角色有没有被丢在走不到的地方"（见 <see cref="EnsurePlayerOnScreen"/>）——
+    /// 碰撞本身走 <see cref="TryResolvePoint"/>，那边的口径是整组窗口。
+    /// 这里故意只认直接相邻：真被丢到两块窗口以外，就该拉回框内，而不是让角色飘在别的房间里。
+    /// </summary>
     bool InsideSomeWindow(GameWindow owner, float mapX, float mapY)
     {
-        // 只认可"走得到"的窗口：自己 + 直接相邻的。
-        // 重叠但不相邻的窗口不算——否则角色会从接缝以外的地方飘到别的房间。
         var u = ViewLocal(owner, new Vector2(mapX, mapY));
-        if (InView(u)) return true;   // 还在自己的取景框里（自己那块地图的实心在 Collides 里查过了）
+        if (InView(u)) return true;   // 还在自己的取景框里
 
         foreach (var w in owner.Neighbors)
         {
@@ -1303,7 +1413,7 @@ internal sealed class Game
         Player.LadderLock = MathF.Max(0, Player.LadderLock - dt);
 
         // 抓住梯子：不落、上下走；在梯子上也能起跳（跳开后短暂不再被抓回去）
-        bool onLadder = Player.LadderLock <= 0 && Player.Piece.ClimbAt(Player.Pos.X, Player.Pos.Y);
+        bool onLadder = Player.LadderLock <= 0 && CellDefAtPlayer()?.Climb == true;
 
         if (onLadder && Player.Buffer > 0)
         {
@@ -1368,7 +1478,7 @@ internal sealed class Game
                         Player.Pos = new Vector2(Player.Pos.X, snappedY);
 
                     // 踩在弹簧上：直接给一个能弹起 SpringHeight 的初速度
-                    if (Player.Piece.SpringAt(Player.Pos.X, Player.Pos.Y + Player.Height / 2f + 0.1f))
+                    if (CellDefAtPlayer(Player.Height / 2f + 0.1f)?.Spring == true)
                     {
                         Player.Vel.Y = -Player.VelocityFor(Player.SpringHeight, dt);
                         Player.OnGround = false;
@@ -1472,7 +1582,8 @@ internal sealed class Game
     /// 相机硬约束：把相机钳到「角色落在取景框 25%~75% 区间内」。
     /// 上面的跟随参数一概不动，这层只在「追不上」时兜底。
     ///
-    /// 为什么必须有：<see cref="Collides"/> 把"取景框之外"当成实心，
+    /// 为什么必须有：<see cref="Collides"/> 把"取景框之外"当成实心
+    /// （相连时以整组窗口拼出来的外边界为准，单块时就是它自己的框边），
     /// 但判定用的是当前帧的相机，而相机是滞后跟随的。长距离快速坠落时
     /// 相机按惯性落后 3~4 格，角色会先掉出框底 —— 空气被当成地面，
     /// 于是「假落地」：OnGround 变真、下落速度被清零。
