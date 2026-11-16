@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>音效剪辑器</title>
+<style>
+  :root{
+    --bg:#16181d; --panel:#1e2128; --panel2:#242833; --line:#333a47;
+    --text:#e6e9ef; --dim:#8b93a3; --accent:#4ec9b0; --accent2:#e0b76a;
+    --sel:#4ec9b033; --selEdge:#4ec9b0;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg); color:var(--text);
+    font:13px/1.5 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  header{display:flex; align-items:center; gap:12px; padding:10px 14px; border-bottom:1px solid var(--line); background:var(--panel)}
+  header h1{font-size:14px; font-weight:600; margin:0; letter-spacing:.4px}
+  header .name{color:var(--dim); font-size:12px; margin-left:4px}
+  .grow{flex:1}
+  button{
+    background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:5px 10px; font:inherit; cursor:pointer;
+  }
+  button:hover{border-color:#4a5364; background:#2b3140}
+  button:active{transform:translateY(1px)}
+  button.primary{background:#1f4d45; border-color:#2c6b60; color:#d6fff5}
+  button.primary:hover{background:#256156}
+  button:disabled{opacity:.4; cursor:default}
+  label.chk{display:inline-flex; align-items:center; gap:5px; color:var(--dim); cursor:pointer; user-select:none}
+  input[type=number]{width:74px; background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:5px; padding:3px 6px; font:inherit}
+  input[type=text]{background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:5px; padding:3px 8px; font:inherit; width:190px}
+  #waveWrap{position:relative; flex:0 0 auto; background:#12141a; border-bottom:1px solid var(--line)}
+  #wave{display:block; width:100%; cursor:crosshair}
+  #drop{
+    position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:10px; color:var(--dim); background:#12141aee; text-align:center; padding:20px;
+  }
+  #drop.hide{display:none}
+  #drop b{color:var(--text); font-size:15px; font-weight:600}
+  #drop.over{background:#16302bee; outline:2px dashed var(--accent); outline-offset:-10px}
+  .bar{display:flex; align-items:center; gap:10px; padding:8px 14px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap}
+  .sep{width:1px; height:20px; background:var(--line)}
+  .readout{font-variant-numeric:tabular-nums; color:var(--accent2)}
+  .readout span{color:var(--dim)}
+  #regions{flex:1; overflow:auto; padding:8px 14px}
+  table{width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums}
+  th,td{text-align:left; padding:5px 8px; border-bottom:1px solid var(--line)}
+  th{color:var(--dim); font-weight:500; font-size:12px}
+  tbody tr:hover{background:#1f232b}
+  tbody tr.sel{background:#1d3a35}
+  td.n{color:var(--dim)}
+  .hint{color:var(--dim); font-size:12px; padding:10px 14px; border-top:1px solid var(--line); background:var(--panel)}
+  kbd{background:#2b3140; border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 5px; font-size:11px; color:var(--text)}
+  .empty{color:var(--dim); padding:14px 0}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>音效剪辑器</h1>
+  <span class="name" id="fileName">未载入文件</span>
+  <span class="grow"></span>
+  <button id="btnOpen">打开音频…</button>
+  <input type="file" id="file" accept="audio/*,video/*" hidden>
+</header>
+
+<div class="bar">
+  <button id="btnPlaySel">▶ 播放选区</button>
+  <button id="btnPlayAll">▶ 全部</button>
+  <label class="chk"><input type="checkbox" id="loop" checked> 循环</label>
+  <div class="sep"></div>
+  <button id="btnZoomOut">−</button>
+  <button id="btnZoomFit">适应</button>
+  <button id="btnZoomIn">+</button>
+  <div class="sep"></div>
+  <span class="readout" id="readout"><span>起点</span> – <span>终点</span> – <span>时长</span> –</span>
+</div>
+
+<div id="waveWrap">
+  <canvas id="wave" height="260"></canvas>
+  <div id="drop">
+    <b>把音频文件拖进来</b>
+    <div>或者点右上角「打开音频…」<br>mp3 / m4a / wav / mp4 都行（浏览器能解的都能用）</div>
+  </div>
+</div>
+
+<div class="bar">
+  <label class="chk">峰值 <input type="number" id="peak" value="-3" step="0.5" min="-40" max="0"> dBFS</label>
+  <label class="chk">淡入 <input type="number" id="fin" value="5" step="1" min="0" max="200"> ms</label>
+  <label class="chk">淡出 <input type="number" id="fout" value="15" step="1" min="0" max="400"> ms</label>
+  <div class="sep"></div>
+  <label class="chk">文件名 <input type="text" id="outName" value="sneeze-ah"></label>
+  <button id="btnAdd">加入列表</button>
+  <button class="primary" id="btnExport">导出选区</button>
+  <button id="btnExportAll">全部导出</button>
+</div>
+
+<div id="regions">
+  <div class="empty" id="regionEmpty">还没有片段。在波形上拖一段，起名，再点「加入列表」。</div>
+  <table id="regionTable" hidden>
+    <thead><tr><th>名称</th><th>起点</th><th>终点</th><th>时长</th><th></th></tr></thead>
+    <tbody id="regionBody"></tbody>
+  </table>
+</div>
+
+<div class="hint">
+  <kbd>拖拽</kbd> 选一段 · <kbd>拖动边缘</kbd> 微调 · <kbd>←</kbd><kbd>→</kbd> 移 10ms（<kbd>Shift</kbd> 为 1ms）·
+  <kbd>空格</kbd> 播放/停止 · <kbd>Ctrl</kbd>+滚轮 缩放 · 滚轮 平移<br>
+  导出的 wav 是 44.1kHz / 16bit / 立体声，直接丢进 <code>src/WindowsLoop/assets/audio/</code> 就能被游戏读到。
+</div>
+
+<script>
+"use strict";
+
+// ── 状态 ────────────────────────────────────────────────────────────────────
+let actx = null;            // 44.1k 上下文：decodeAudioData 会把素材重采样到这个采样率
+let buffer = null;          // 解码后的 AudioBuffer
+let mono = null;            // Float32Array，波形与包络用
+let dur = 0;                // 时长（秒）
+let sel = null;             // {start, end} 秒
+let dragMode = null;        // 'new' | 'start' | 'end' | 'pan'
+let dragAnchor = 0, panStart = 0, panView = 0;
+let view = { t0: 0, t1: 1 }; // 可见区间（秒）
+let playing = null;         // {node, startedAt, from, to, loop}
+let regions = [];           // {name, start, end}
+let selectedRegion = -1;
+
+const $ = (id) => document.getElementById(id);
+const canvas = $("wave");
+const g = canvas.getContext("2d");
+
+const SR = 44100;
+const EDGE_PX = 6;          // 边缘抓取容差
+
+// ── 坐标换算 ────────────────────────────────────────────────────────────────
+const cssW = () => canvas.clientWidth;
+const cssH = () => canvas.clientHeight;
+const tToX = (t) => (t - view.t0) / (view.t1 - view.t0) * cssW();
+const xToT = (x) => view.t0 + x / cssW() * (view.t1 - view.t0);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const fmt = (t) => {
+  if (!isFinite(t)) return "–";
+  const m = Math.floor(t / 60), s = t - m * 60;
+  return m ? `${m}:${s.toFixed(3).padStart(6, "0")}` : s.toFixed(3);
+};
+
+// ── 画布 ────────────────────────────────────────────────────────────────────
+function resizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = cssW(), h = 260;
+  canvas.style.height = h + "px";
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+window.addEventListener("resize", resizeCanvas);
+
+function draw() {
+  const w = cssW(), h = cssH();
+  g.clearRect(0, 0, w, h);
+  g.fillStyle = "#12141a";
+  g.fillRect(0, 0, w, h);
+
+  if (!buffer) return;
+
+  const mid = h / 2;
+
+  // 选区底色
+  if (sel && sel.end > sel.start) {
+    const x0 = tToX(sel.start), x1 = tToX(sel.end);
+    g.fillStyle = "rgba(78,201,176,0.16)";
+    g.fillRect(x0, 0, Math.max(1, x1 - x0), h);
+  }
+
+  // 中线
+  g.strokeStyle = "#232833";
+  g.beginPath(); g.moveTo(0, mid); g.lineTo(w, mid); g.stroke();
+
+  // 波形：每列取 min/max
+  const t0 = view.t0, t1 = view.t1, span = t1 - t0;
+  const spp = span * SR / w;          // 每列对应多少采样
+  const n = mono.length;
+  g.strokeStyle = "#5a6474";
+  g.beginPath();
+  for (let x = 0; x < w; x++) {
+    const s0 = Math.floor((t0 + span * x / w) * SR);
+    const s1 = Math.min(n, Math.floor(s0 + Math.max(1, spp)));
+    if (s0 >= n) break;
+    let lo = 0, hi = 0;
+    for (let i = s0; i < s1; i++) { const v = mono[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+    g.moveTo(x + 0.5, mid - hi * mid * 0.92);
+    g.lineTo(x + 0.5, mid - lo * mid * 0.92 + 0.7);
+  }
+  g.stroke();
+
+  // 时间刻度
+  g.fillStyle = "#6b7484";
+  g.font = "11px Consolas, monospace";
+  g.strokeStyle = "#273040";
+  const step = niceStep(span);
+  for (let t = Math.ceil(t0 / step) * step; t < t1; t += step) {
+    const x = tToX(t);
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke();
+    g.fillText(t.toFixed(step < 0.1 ? 3 : 2), x + 3, 12);
+  }
+
+  // 选区边缘
+  if (sel && sel.end > sel.start) {
+    const x0 = tToX(sel.start), x1 = tToX(sel.end);
+    g.fillStyle = "#4ec9b0";
+    g.fillRect(x0 - 1, 0, 2, h);
+    g.fillRect(x1 - 1, 0, 2, h);
+    g.fillRect(x0 - 4, 0, 8, 6);
+    g.fillRect(x1 - 4, h - 6, 8, 6);
+  }
+
+  // 播放头
+  if (playing) {
+    const t = playheadTime();
+    if (t >= t0 && t <= t1) {
+      g.fillStyle = "#e0b76a";
+      g.fillRect(tToX(t) - 1, 0, 2, h);
+    }
+  }
+}
+
+function niceStep(span) {
+  const raw = span / 8;
+  const p = Math.pow(10, Math.floor(Math.log10(raw)));
+  const m = raw / p;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
+}
+
+// ── 载入 ────────────────────────────────────────────────────────────────────
+async function load(file) {
+  stop();
+  try {
+    if (!actx) actx = new AudioContext({ sampleRate: SR });
+    if (actx.state === "suspended") await actx.resume();
+
+    const buf = await file.arrayBuffer();
+    buffer = await actx.decodeAudioData(buf);
+    dur = buffer.duration;
+
+    // 混成单声道给波形用
+    mono = new Float32Array(buffer.length);
+    for (let c = 0; c < buffer.numberOfChannels; c++) {
+      const d = buffer.getChannelData(c);
+      for (let i = 0; i < d.length; i++) mono[i] += d[i] / buffer.numberOfChannels;
+    }
+
+    view = { t0: 0, t1: dur };
+    sel = { start: 0, end: Math.min(dur, 0.5) };
+    $("fileName").textContent = `${file.name} · ${dur.toFixed(2)}s · ${buffer.numberOfChannels}ch · ${buffer.sampleRate}Hz`;
+    $("drop").classList.add("hide");
+    resizeCanvas();
+    updateReadout();
+  } catch (e) {
+    alert("这个文件解不开：" + e.message);
+  }
+}
+
+// ── 播放 ────────────────────────────────────────────────────────────────────
+function playheadTime() {
+  if (!playing) return 0;
+  const span = playing.to - playing.from;
+  let t = playing.from + (actx.currentTime - playing.startedAt);
+  if (playing.loop && span > 0) t = playing.from + ((t - playing.from) % span);
+  return t;
+}
+
+function play(from, to) {
+  stop();
+  if (!buffer) return;
+  if (to - from < 0.005) return;
+
+  const node = actx.createBufferSource();
+  node.buffer = buffer;
+  node.connect(actx.destination);
+
+  const loop = $("loop").checked;
+  if (loop) { node.loop = true; node.loopStart = from; node.loopEnd = to; node.start(0, from); }
+  else node.start(0, from, to - from);
+
+  node.onended = () => { if (playing && playing.node === node) { playing = null; draw(); } };
+  playing = { node, startedAt: actx.currentTime, from, to, loop };
+  tick();
+}
+
+function stop() {
+  if (playing) { try { playing.node.stop(); } catch {} ; playing = null; }
+  draw();
+}
+
+let rafId = 0;
+function tick() {
+  cancelAnimationFrame(rafId);
+  const step = () => {
+    if (!playing) return;
+    draw();
+    if (!playing.loop && actx.currentTime - playing.startedAt > playing.to - playing.from) {
+      playing = null; draw(); return;
+    }
+    rafId = requestAnimationFrame(step);
+  };
+  rafId = requestAnimationFrame(step);
+}
+
+// ── 选区交互 ────────────────────────────────────────────────────────────────
+function localX(e) {
+  const r = canvas.getBoundingClientRect();
+  return clamp(e.clientX - r.left, 0, r.width);
+}
+
+function hitEdge(x) {
+  if (!sel) return null;
+  const x0 = tToX(sel.start), x1 = tToX(sel.end);
+  if (Math.abs(x - x0) <= EDGE_PX) return "start";
+  if (Math.abs(x - x1) <= EDGE_PX) return "end";
+  return null;
+}
+
+canvas.addEventListener("mousedown", (e) => {
+  if (!buffer) return;
+  const x = localX(e);
+  const edge = hitEdge(x);
+  if (edge) { dragMode = edge; return; }
+  if (e.button === 1 || e.shiftKey) {
+    dragMode = "pan"; panStart = x; panView = view.t0; return;
+  }
+  dragMode = "new";
+  dragAnchor = clamp(xToT(x), 0, dur);
+  sel = { start: dragAnchor, end: dragAnchor };
+  draw(); updateReadout();
+});
+
+canvas.addEventListener("mousemove", (e) => {
+  if (!buffer) return;
+  const x = localX(e);
+  const t = clamp(xToT(x), 0, dur);
+
+  if (!dragMode) {
+    const edge = hitEdge(x);
+    canvas.style.cursor = edge ? "ew-resize" : "crosshair";
+    return;
+  }
+
+  if (dragMode === "new") {
+    sel.start = Math.min(dragAnchor, t);
+    sel.end = Math.max(dragAnchor, t);
+  } else if (dragMode === "start") {
+    sel.start = Math.min(t, sel.end - 0.001);
+  } else if (dragMode === "end") {
+    sel.end = Math.max(t, sel.start + 0.001);
+  } else if (dragMode === "pan") {
+    const dT = (x - panStart) / cssW() * (view.t1 - view.t0);
+    const span = view.t1 - view.t0;
+    const t0 = clamp(panView - dT, 0, Math.max(0, dur - span));
+    view = { t0, t1: t0 + span };
+  }
+  draw(); updateReadout();
+});
+
+window.addEventListener("mouseup", () => { dragMode = null; });
+
+canvas.addEventListener("wheel", (e) => {
+  if (!buffer) return;
+  e.preventDefault();
+  if (e.ctrlKey) {
+    // 缩放：以光标为中心
+    const tAt = xToT(localX(e));
+    const k = e.deltaY > 0 ? 1.25 : 0.8;
+    let span = clamp((view.t1 - view.t0) * k, 0.02, dur);
+    let t0 = clamp(tAt - (tAt - view.t0) * (span / (view.t1 - view.t0)), 0, Math.max(0, dur - span));
+    view = { t0, t1: t0 + span };
+  } else {
+    const span = view.t1 - view.t0;
+    const t0 = clamp(view.t0 + e.deltaY / 400 * span, 0, Math.max(0, dur - span));
+    view = { t0, t1: t0 + span };
+  }
+  draw();
+}, { passive: false });
+
+// ── 键盘 ────────────────────────────────────────────────────────────────────
+window.addEventListener("keydown", (e) => {
+  if (!buffer) return;
+  if (e.target.tagName === "INPUT") return;
+
+  if (e.code === "Space") {
+    e.preventDefault();
+    if (playing) stop(); else play(sel.start, sel.end);
+    return;
+  }
+  if (!sel) return;
+  const step = (e.shiftKey ? 0.001 : 0.01);
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    e.preventDefault();
+    const d = e.key === "ArrowLeft" ? -step : step;
+    if (e.altKey) { sel.end = clamp(sel.end + d, sel.start + 0.001, dur); }
+    else { const len = sel.end - sel.start; sel.start = clamp(sel.start + d, 0, dur - len); sel.end = sel.start + len; }
+    draw(); updateReadout();
+  }
+});
+
+// ── 读数 ────────────────────────────────────────────────────────────────────
+function updateReadout() {
+  const r = $("readout");
+  if (!sel) { r.innerHTML = "<span>起点</span> – <span>终点</span> – <span>时长</span> –"; return; }
+  r.innerHTML =
+    `<span>起点</span> ${fmt(sel.start)} &nbsp;` +
+    `<span>终点</span> ${fmt(sel.end)} &nbsp;` +
+    `<span>时长</span> ${(sel.end - sel.start).toFixed(3)}s`;
+}
+
+// ── 导出 ────────────────────────────────────────────────────────────────────
+function buildWav(start, end, peakDb, finMs, foutMs) {
+  const i0 = Math.max(0, Math.round(start * SR));
+  const i1 = Math.min(buffer.length, Math.round(end * SR));
+  const n = i1 - i0;
+  if (n <= 0) return null;
+
+  const chs = Math.min(2, buffer.numberOfChannels);
+  const data = [];
+  for (let c = 0; c < chs; c++) data.push(buffer.getChannelData(c));
+
+  // 找峰值（所有声道一起）
+  let peak = 0;
+  for (let c = 0; c < chs; c++) {
+    const d = data[c];
+    for (let i = i0; i < i1; i++) { const a = Math.abs(d[i]); if (a > peak) peak = a; }
+  }
+  const gain = peak > 1e-6 ? Math.pow(10, peakDb / 20) / peak : 1;
+
+  const fi = Math.max(1, Math.round(finMs / 1000 * SR));
+  const fo = Math.max(1, Math.round(foutMs / 1000 * SR));
+
+  const bytes = 44 + n * chs * 2;
+  const ab = new ArrayBuffer(bytes);
+  const dv = new DataView(ab);
+
+  const wr = (off, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(off + i, s.charCodeAt(i)); };
+  wr(0, "RIFF"); dv.setUint32(4, bytes - 8, true); wr(8, "WAVE");
+  wr(12, "fmt "); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
+  dv.setUint16(22, chs, true); dv.setUint32(24, SR, true);
+  dv.setUint32(28, SR * chs * 2, true); dv.setUint16(32, chs * 2, true); dv.setUint16(34, 16, true);
+  wr(36, "data"); dv.setUint32(40, n * chs * 2, true);
+
+  let off = 44;
+  for (let i = 0; i < n; i++) {
+    let env = 1;
+    if (i < fi) env = i / fi;
+    const rem = n - 1 - i;
+    if (rem < fo) env = Math.min(env, rem / fo);
+
+    for (let c = 0; c < chs; c++) {
+      let v = data[c][i0 + i] * gain * env;
+      v = clamp(v, -1, 1);
+      dv.setInt16(off, Math.round(v * 32767), true);
+      off += 2;
+    }
+  }
+  return new Blob([ab], { type: "audio/wav" });
+}
+
+function download(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name.endsWith(".wav") ? name : name + ".wav";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+function exportOne(start, end, name) {
+  const blob = buildWav(start, end, parseFloat($("peak").value),
+                        parseFloat($("fin").value), parseFloat($("fout").value));
+  if (!blob) { alert("选区是空的"); return false; }
+  download(blob, name);
+  return true;
+}
+
+// ── 列表 ────────────────────────────────────────────────────────────────────
+function renderRegions() {
+  const tb = $("regionBody");
+  tb.innerHTML = "";
+  $("regionTable").hidden = regions.length === 0;
+  $("regionEmpty").hidden = regions.length > 0;
+
+  regions.forEach((r, i) => {
+    const tr = document.createElement("tr");
+    if (i === selectedRegion) tr.className = "sel";
+    tr.innerHTML = `<td>${escapeHtml(r.name)}</td><td>${fmt(r.start)}</td><td>${fmt(r.end)}</td>
+      <td>${(r.end - r.start).toFixed(3)}s</td>
+      <td><button data-act="pick" data-i="${i}">选中</button>
+          <button data-act="play" data-i="${i}">▶</button>
+          <button data-act="del" data-i="${i}">删</button></td>`;
+    tb.appendChild(tr);
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+$("regionBody").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  const i = +b.dataset.i;
+  if (b.dataset.act === "pick") {
+    selectedRegion = i;
+    sel = { start: regions[i].start, end: regions[i].end };
+    $("outName").value = regions[i].name;
+    renderRegions(); draw(); updateReadout();
+  } else if (b.dataset.act === "play") {
+    play(regions[i].start, regions[i].end);
+  } else if (b.dataset.act === "del") {
+    regions.splice(i, 1);
+    if (selectedRegion >= regions.length) selectedRegion = -1;
+    renderRegions();
+  }
+});
+
+// ── 按钮 ────────────────────────────────────────────────────────────────────
+$("btnOpen").onclick = () => $("file").click();
+$("file").onchange = (e) => { if (e.target.files[0]) load(e.target.files[0]); };
+$("btnPlaySel").onclick = () => { if (sel) play(sel.start, sel.end); };
+$("btnPlayAll").onclick = () => play(0, dur);
+$("btnZoomIn").onclick = () => { const c = (view.t0 + view.t1) / 2; let s = clamp((view.t1 - view.t0) * 0.6, 0.02, dur); const t0 = clamp(c - s / 2, 0, Math.max(0, dur - s)); view = { t0, t1: t0 + s }; draw(); };
+$("btnZoomOut").onclick = () => { const c = (view.t0 + view.t1) / 2; let s = clamp((view.t1 - view.t0) * 1.7, 0.02, dur); const t0 = clamp(c - s / 2, 0, Math.max(0, dur - s)); view = { t0, t1: t0 + s }; draw(); };
+$("btnZoomFit").onclick = () => { view = { t0: 0, t1: dur }; draw(); };
+
+$("btnAdd").onclick = () => {
+  if (!sel || sel.end - sel.start < 0.005) { alert("先选一段"); return; }
+  const name = ($("outName").value || "clip").trim();
+  regions.push({ name, start: sel.start, end: sel.end });
+  selectedRegion = regions.length - 1;
+  renderRegions();
+};
+
+$("btnExport").onclick = () => {
+  if (!sel) return;
+  const name = ($("outName").value || "clip").trim();
+  exportOne(sel.start, sel.end, name);
+};
+
+$("btnExportAll").onclick = () => {
+  if (!regions.length) { alert("列表是空的"); return; }
+  regions.forEach((r, i) => setTimeout(() => exportOne(r.start, r.end, r.name), i * 350));
+};
+
+// 拖放
+const drop = $("drop");
+["dragenter", "dragover"].forEach(ev => document.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.add("over"); drop.classList.remove("hide");
+}));
+["dragleave", "drop"].forEach(ev => document.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.remove("over");
+  if (buffer) drop.classList.add("hide");
+}));
+document.addEventListener("drop", (e) => {
+  const f = e.dataTransfer.files[0];
+  if (f) load(f);
+});
+
+resizeCanvas();
+</script>
+</body>
+</html>
