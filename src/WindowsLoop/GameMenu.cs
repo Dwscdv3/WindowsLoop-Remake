@@ -2,8 +2,13 @@ using System.Drawing;
 
 namespace WindowsLoop;
 
-/// <summary>一条菜单项。<see cref="Text"/> 为 null 表示分隔线，<see cref="Id"/> 是回给调用方的命令号。</summary>
-internal readonly record struct MenuEntry(int Id, string? Text);
+/// <summary>
+/// 一条菜单项。<see cref="Text"/> 为 null 表示分隔线，<see cref="Id"/> 是回给调用方的命令号。
+///
+/// <see cref="Shortcut"/> 是快捷键标注，单独传，**不要自己拼进 <see cref="Text"/> 里**
+/// （手打 "(R)" 那种写法不是 Windows 的标准做法，既对不齐也和系统菜单长得不一样）。
+/// </summary>
+internal readonly record struct MenuEntry(int Id, string? Text, string? Shortcut = null);
 
 /// <summary>
 /// 系统原生弹出菜单（CreatePopupMenu + TrackPopupMenu）。
@@ -34,9 +39,15 @@ internal static class GameMenu
             foreach (var entry in entries)
             {
                 if (entry.Text == null)
+                {
                     Native.AppendMenu(menu, Native.MF_SEPARATOR, UIntPtr.Zero, null);
-                else
-                    Native.AppendMenu(menu, Native.MF_STRING, (UIntPtr)(uint)entry.Id, entry.Text);
+                    continue;
+                }
+
+                // 快捷键用制表符跟在标题后面：系统的菜单绘制会把 Tab 之后的部分
+                // 摆到右侧那一列并按标准对齐，和资源里写的 "Ctrl+S" 是同一个效果。
+                string label = entry.Shortcut is null ? entry.Text : entry.Text + "\t" + entry.Shortcut;
+                Native.AppendMenu(menu, Native.MF_STRING, (UIntPtr)(uint)entry.Id, label);
             }
 
             int cmd = Native.TrackPopupMenu(menu,

@@ -106,7 +106,6 @@ internal static class Native
 
     // ── Z 序 ──────────────────────────────────────────────────────────────
 
-    public const int VK_A = 0x41, VK_D = 0x44, VK_W = 0x57, VK_S = 0x53, VK_SPACE = 0x20, VK_R = 0x52, VK_M = 0x4D, VK_ESCAPE = 0x1B;
     /// <summary>Z 序最上面那个窗口（桌面的第一个子窗口）。</summary>
     [DllImport("user32.dll")]
     public static extern IntPtr GetTopWindow(IntPtr hWnd);
@@ -125,5 +124,6 @@ internal static class Native
     public const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOACTIVATE = 0x0010;
 
 
+    public const int VK_A = 0x41, VK_D = 0x44, VK_W = 0x57, VK_S = 0x53, VK_SPACE = 0x20, VK_R = 0x52, VK_M = 0x4D, VK_N = 0x4E, VK_ESCAPE = 0x1B;
     public const int VK_UP = 0x26, VK_DOWN = 0x28;
 }

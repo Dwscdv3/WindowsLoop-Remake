@@ -20,6 +20,7 @@ internal sealed class GameWindow : Form
     const int MenuOpenWindow = 1;
     const int MenuToggleMute = 2;
     const int MenuQuit = 3;
+    const int MenuRestart = 4;
     int _clientOffsetX, _clientOffsetY;
     Point _desiredClientOrigin;
     bool _dragActive;
@@ -200,14 +201,16 @@ internal sealed class GameWindow : Form
     void ShowGameMenu()
     {
         int cmd = GameMenu.Show(Handle, Cursor.Position,
-            new MenuEntry(MenuOpenWindow, "新开一个窗口"),
-            new MenuEntry(MenuToggleMute, _game.Audio.Muted ? "取消静音" : "静音"),
+            new MenuEntry(MenuRestart, "重开本关", "R"),
+            new MenuEntry(MenuOpenWindow, "新开一个窗口", "N"),
+            new MenuEntry(MenuToggleMute, _game.Audio.Muted ? "取消静音" : "静音", "M"),
             new MenuEntry(0, null),                       // 分隔线
-            new MenuEntry(MenuQuit, "退出游戏"));
+            new MenuEntry(MenuQuit, "退出游戏", "Esc"));
 
         switch (cmd)
         {
-            case MenuOpenWindow: _game.Enqueue(_game.OpenWindow); break;
+            case MenuRestart: _game.Enqueue(_game.RestartLevel); break;
+            case MenuOpenWindow: _game.Enqueue(_game.SpawnWindow); break;
             case MenuToggleMute: _game.Enqueue(() => _game.Audio.ToggleMute()); break;
             case MenuQuit: _game.Enqueue(_game.Quit); break;
         }

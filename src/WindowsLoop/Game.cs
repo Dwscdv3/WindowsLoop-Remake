@@ -27,6 +27,8 @@ internal sealed class Game
     /// <summary>单实例音频：BGM / 脚步循环 / 一次性音效。</summary>
     public readonly AudioManager Audio = new();
     bool _mDown;
+    bool _nDown;   // N 新开窗口
+    bool _rDown;   // R 重开的边沿检测，别借用跳跃键的状态
     bool _wasOnGround;
 
     /// <summary>本次离地已经持续多久；落地音只在真正滞空之后才响，避免一帧抖动就重复触发。</summary>
@@ -929,7 +931,7 @@ internal sealed class Game
         if (Fading)
         {
             UpdateFade(dt);
-            _spaceDown = Key(Native.VK_SPACE);
+            TrackHotkeys();
             Audio.SetWalking(false);
             Audio.Update(dt);
             return;
@@ -938,7 +940,7 @@ internal sealed class Game
         if (Paused)
         {
             // 拖动窗口期间整局挂起：物理、相机复位、窗口连接全部延后到松手
-            _spaceDown = Key(Native.VK_SPACE);
+            TrackHotkeys();
             Audio.SetWalking(false);   // 挂起时脚步淡出，BGM 照常
             Audio.Update(dt);
             return;
@@ -1142,6 +1144,18 @@ internal sealed class Game
 
     static bool Key(int vk) => (Native.GetAsyncKeyState(vk) & 0x8000) != 0;
 
+    /// <summary>
+    /// 物理和输入挂起时（过场、拖动窗口）也要跟住这几个键的按下状态：
+    /// 不刷新的话，挂起期间按过的键会在恢复的第一帧被当成"刚按下"，白执行一次。
+    /// </summary>
+    void TrackHotkeys()
+    {
+        _spaceDown = Key(Native.VK_SPACE);
+        _rDown = Key(Native.VK_R);
+        _nDown = Key(Native.VK_N);
+        _mDown = Key(Native.VK_M);
+    }
+
     void UpdateInput(float dt)
     {
         bool active = OurProcessForeground();
@@ -1149,6 +1163,9 @@ internal sealed class Game
         float axis = 0;
         float climb = 0;
         bool spaceNow = false;
+        bool rNow = false;
+        bool nNow = false;
+        bool mNow = false;
         if (active)
         {
             if (Key(Native.VK_A)) axis -= 1;
@@ -1156,12 +1173,24 @@ internal sealed class Game
             if (Key(Native.VK_W) || Key(Native.VK_UP)) climb -= 1;
             if (Key(Native.VK_S) || Key(Native.VK_DOWN)) climb += 1;
             spaceNow = Key(Native.VK_SPACE);
-            if (Key(Native.VK_R) && !_spaceDown) Restart();
+            rNow = Key(Native.VK_R);
+            nNow = Key(Native.VK_N);
+            mNow = Key(Native.VK_M);
             if (Key(Native.VK_ESCAPE)) Quit();
         }
 
+        // R 重开整关：按住只在按下沿触发一次（以前这里是拿 _spaceDown 做边沿，
+        // 跳跃键的状态一变 R 就会跟着误触）
+        if (rNow && !_rDown) RestartLevel();
+        _rDown = rNow;
+
+        // N 新开窗口：和右键菜单那条是同一件事，同样丢给主循环延后执行
+        // （建窗会走 Form.Show，不在更新中途动窗口列表更省心）。
+        // 上限由 SpawnWindow / CreateWindowAt 按关卡的最大窗口数挡掉。
+        if (nNow && !_nDown) Enqueue(SpawnWindow);
+        _nDown = nNow;
+
         // M 静音：按下沿触发，和右键菜单共用同一个开关
-        bool mNow = active && Key(Native.VK_M);
         if (mNow && !_mDown) Audio.ToggleMute();
         _mDown = mNow;
 
@@ -1824,18 +1853,6 @@ internal sealed class Game
         var w = _lastWindow;
         if (w == null || w.IsDisposed) w = Windows.Count > 0 ? Windows[0] : null;
         if (w == null) return;
-        PlaceAtSpawn(w);
-        Player.Vel = Vector2.Zero;
-    }
-
-    void Restart()
-    {
-        _firedEvents.Clear();
-        if (Windows.Count == 0) return;
-        var w = Windows[0];
-        var spawnPos = new Vector2(w.Piece.Spawn.X + 0.5f, w.Piece.Spawn.Y + 0.5f);
-        var cam = CameraTarget(spawnPos);
-        w.SetCamera(cam.X, cam.Y);
         PlaceAtSpawn(w);
         Player.Vel = Vector2.Zero;
     }
