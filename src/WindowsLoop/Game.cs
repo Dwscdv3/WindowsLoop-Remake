@@ -86,6 +86,12 @@ internal sealed class Game
 
     public void Enqueue(Action action) => _actions.Enqueue(action);
 
+    /// <summary>
+    /// 第一块窗口的默认客户区原点：启动进关时把窗口摆在这里。
+    /// 重开不回到这个点 —— 那个位置属于玩家，留用窗口原位不动。
+    /// </summary>
+    public static Point DefaultClientOrigin => GameWindow.ClampToScreen(new Point(240, 160));
+
     public void PumpActions()
     {
         while (_actions.TryDequeue(out var action))
@@ -106,7 +112,7 @@ internal sealed class Game
         Point clientOrigin;
         if (Windows.Count == 0)
         {
-            clientOrigin = new Point(240, 160);
+            clientOrigin = DefaultClientOrigin;
         }
         else
         {
@@ -1626,7 +1632,7 @@ internal sealed class Game
         }
     }
 
-    // ── 跳转关卡的过场 ────────────────────────────────────────────────────
+    // ── 换关卡 / 重开的过场 ──────────────────────────────────────────────
 
     enum FadePhase { None, Out, In }
 
@@ -1636,6 +1642,9 @@ internal sealed class Game
     float _fade;
 
     string _pendingLevel = "";
+
+    /// <summary>白场盖住的那一刻要做的不是跳关，而是把当前关卡整个重置回初始状态。</summary>
+    bool _restartPending;
 
     const float FadeOutTime = 0.20f;
     const float FadeInTime = 0.34f;
@@ -1651,13 +1660,35 @@ internal sealed class Game
 
     public bool Swapping => _swapping;
 
-    /// <summary>程序自己在开窗（换关卡），不响"新窗口"音效。</summary>
+    /// <summary>程序自己在开窗（换关卡 / 重开），不响"新窗口"音效。</summary>
     bool _suppressSfx;
 
     void BeginFadeTo(string level)
     {
         if (Fading) return;
         _pendingLevel = level;
+        _restartPending = false;
+        StartFade();
+    }
+
+    /// <summary>
+    /// 按 R / 右键菜单「重开本关」：把整个关卡重置回刚进入它时的样子。
+    ///
+    /// 走的是和跳关完全同一套白场过场（0.2s 闪白 → 重建 → 0.34s 淡出）：
+    /// 拆窗建窗那一帧被白场盖着，看不到闪烁，物理和输入在过场期间也自动挂起。
+    /// 只重置内存里这一局的状态，**不重新读盘**（口径已跟用户确认）。
+    /// </summary>
+    public void RestartLevel()
+    {
+        if (Fading) return;
+        if (Windows.Count == 0) return;   // 已经没有窗口了，主循环随时会收摊
+        _restartPending = true;
+        _pendingLevel = "";
+        StartFade();
+    }
+
+    void StartFade()
+    {
         _fadePhase = FadePhase.Out;
         _fade = 0f;
         Player.Vel = Vector2.Zero;
@@ -1672,7 +1703,15 @@ internal sealed class Game
             if (_fade < 1f) return;
 
             _fade = 1f;
-            SwitchLevel(_pendingLevel);
+            if (_restartPending)
+            {
+                _restartPending = false;
+                RebuildLevel();          // 关卡数据本身不动，只按它从零再摆一遍
+            }
+            else
+            {
+                SwitchLevel(_pendingLevel);
+            }
             _pendingLevel = "";
             _fadePhase = FadePhase.In;
         }
@@ -1693,16 +1732,72 @@ internal sealed class Game
     {
         if (string.IsNullOrWhiteSpace(name)) return;
         if (!TryLoadLevel(name)) return;
+        RebuildLevel();
+    }
+
+    /// <summary>
+    /// 按当前 <see cref="Level"/> 从零重建整局：只留一块窗口继续用，多余的拆掉，
+    /// 角色放回出生点，触发过的事件、接缝特效、拖拽与相机惯性全部清空。
+    /// 重开（<see cref="RestartLevel"/>）和跳关（<see cref="SwitchLevel"/>）都走这里，
+    /// 唯一区别是跳关之前先把关卡文件换掉了。
+    ///
+    /// **必须是"留一块旧窗口继续用"，不能拆光再新建**：新建的窗口在游戏画出第一帧之前，
+    /// 会先被系统按 BackColor 抹一遍（深蓝），而那一刻白场正盖满画面——
+    /// 于是纯白中间闪出一个深色方块。旧窗口在过场期间一直是纯白，
+    /// 换地图、换镜头、清状态全在白色底下完成，看不出任何变化。
+    /// 留用的是 1 号窗口（<see cref="Windows"/> 的第一个），它的屏幕位置原样保留。
+    /// </summary>
+    void RebuildLevel()
+    {
+        GameWindow? keep = null;
+        foreach (var w in Windows)
+        {
+            if (w.IsDisposed) continue;
+            keep = w;   // 1 号窗口
+            break;
+        }
 
         _swapping = true;
         try
         {
             foreach (var w in Windows.ToArray())
-                if (!w.IsDisposed) w.Close();
+                if (w != keep && !w.IsDisposed) w.Close();
             Windows.Clear();
         }
         finally { _swapping = false; }
 
+        ClearRoundState();
+
+        if (keep == null)
+        {
+            // 连一块能留用的窗口都没有（启动那一帧），只能老实新建一个
+            _suppressSfx = true;
+            try { OpenWindow(); }
+            finally { _suppressSfx = false; }
+            return;
+        }
+
+        Windows.Add(keep);
+
+        // 回到"刚进这一关"的摆法：显示第一块地图、镜头对准出生点。
+        // **窗口自己的屏幕位置不动**（用户口径：重开保留 1 号窗口的位置），
+        // 所以这里不碰 ClientScreen —— 位置没变化，白场下面连一次移动都不会发生。
+        keep.Piece = PieceForSlot(0);
+        keep.Dragging = false;
+
+        var spawnPos = new Vector2(keep.Piece.Spawn.X + 0.5f, keep.Piece.Spawn.Y + 0.5f);
+        var cam = CameraTarget(spawnPos);
+        keep.SetCamera(cam.X, cam.Y);
+
+        PlaceAtSpawn(keep);
+        RefreshLayout();
+    }
+
+    /// <summary>把这一局的所有运行状态归位（不碰关卡数据和窗口）。</summary>
+    void ClearRoundState()
+    {
+        _spawn = null;   // 新生动画作废：窗口马上要重排，飞的那块已经不算数了
+        _spawnQueued = false;
         _groups.Clear();
         _groupSignature = "";
         SeamFlashes.Clear();
@@ -1714,17 +1809,14 @@ internal sealed class Game
         _wasOnGround = false;
         _airTime = 0f;
 
-        // 角色状态清干净：旧关卡的地图块马上会被新窗口的出生点顶替
+        // 角色状态清干净：出生点会在 OpenWindow → PlaceAtSpawn 里重新设定
         Player.Pos = Vector2.Zero;
         Player.Vel = Vector2.Zero;
         Player.Buffer = 0;
         Player.OnGround = false;
         Player.Coyote = 0;
         Player.LadderLock = 0;
-
-        _suppressSfx = true;
-        try { OpenWindow(); }
-        finally { _suppressSfx = false; }
+        Player.ClimbAxis = 0;
     }
 
     void Respawn()
