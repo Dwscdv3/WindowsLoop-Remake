@@ -20,6 +20,9 @@ internal sealed class MainForm : Form
     LevelDoc _doc = LevelDoc.NewLevel();
     string? _path;
     Bitmap? _sheet;
+
+    /// <summary>箱子贴图（16x16，一格）。和游戏共用 assets/crate.png。</summary>
+    Bitmap? _crate;
     int _pieceIndex;
     char _brush = '#';
 
@@ -94,6 +97,8 @@ internal sealed class MainForm : Form
     readonly CheckBox _camXOn = new(), _camYOn = new();
     readonly ListBox _cellEvtList = new();
     readonly Label _cellEvtLabel = new();
+    readonly ComboBox _platePiece = new();
+    readonly NumericUpDown _plateX = new(), _plateY = new();
     readonly Font _tagFont = new("Consolas", 9f, FontStyle.Bold);
     readonly WheelRouter _wheelRouter;
 
@@ -108,6 +113,9 @@ internal sealed class MainForm : Form
 
         try { _sheet = new Bitmap(LevelStore.TileSheetPath); }
         catch { _sheet = null; }
+
+        try { _crate = new Bitmap(Path.Combine(LevelStore.AssetsDir, "crate.png")); }
+        catch { _crate = null; }
 
         BuildUi();
         NewDocument();
@@ -130,20 +138,28 @@ internal sealed class MainForm : Form
     /// <summary>
     /// H / V / R 三个字母做翻转与旋转。作用两处：改画笔朝向（之后画的都带这个朝向），
     /// 同时把光标下的那一格就地转一下——单格微调不必重新刷一遍。
+    ///
+    /// 这些键全是"改地图"的，所以只在「地图编辑」页有效：在网格事件页里按 S 是想翻列表 / 打字，
+    /// 不该顺手把画布上那一格改了（之前的串键就是这么来的）。
     /// </summary>
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
         if (IsTypingInField()) return base.ProcessCmdKey(ref msg, keyData);
 
+        bool mapTab = _tabs.SelectedIndex == 0;
+
         switch (keyData)
         {
             case Keys.Control | Keys.X:
+                if (!mapTab) break;
                 CutSelection();
                 return true;
             case Keys.Control | Keys.C:
+                if (!mapTab) break;
                 CopySelection();
                 return true;
             case Keys.Control | Keys.V:
+                if (!mapTab) break;
                 PasteAtMouse();
                 return true;
             case Keys.Escape:
@@ -154,6 +170,7 @@ internal sealed class MainForm : Form
             case Keys.Left:
             case Keys.Right:
                 // 列表框 / 下拉框自己也要用方向键，别抢
+                if (!mapTab) break;
                 if (_selection != null && ActiveControl is not ListBox && ActiveControl is not ComboBox)
                 {
                     NudgeSelection(
@@ -165,22 +182,46 @@ internal sealed class MainForm : Form
             case Keys.H:
             case Keys.V:
             case Keys.R:
+                if (!mapTab) break;
                 ApplyOrientation(keyData);
                 return true;
             case Keys.S:
+                if (!mapTab) break;
                 CycleBrushSolid();
                 return true;
             case Keys.D:
+                if (!mapTab) break;
                 ToggleBrushDim();
                 return true;
         }
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
-    /// <summary>焦点在文本/数字输入框里时不要抢字母键。</summary>
-    bool IsTypingInField() =>
-        ActiveControl is TextBoxBase or UpDownBase ||
-        ActiveControl?.GetType().Name.Contains("UpDown", StringComparison.Ordinal) == true;
+    /// <summary>
+    /// 焦点在文本 / 数字输入框里时不要抢字母键。
+    ///
+    /// 别只看 <see cref="ContainerControl.ActiveControl"/>：控件嵌在 Panel / TabPage 里时它不一定
+    /// 指到最深那一层，结果是名字框拿到了焦点、字母还是被上面的快捷键吃掉（用户报的就是这个）。
+    /// 这里直接顺着控件树找真正 Focused 的那个。
+    /// </summary>
+    bool IsTypingInField() => IsTextEntry(FocusedControl(this));
+
+    static Control? FocusedControl(Control root)
+    {
+        if (root.Focused) return root;
+        foreach (Control child in root.Controls)
+        {
+            var hit = FocusedControl(child);
+            if (hit != null) return hit;
+        }
+        return null;
+    }
+
+    /// <summary>能接收文字输入的控件：文本框、数字框、可编辑下拉框。</summary>
+    static bool IsTextEntry(Control? c) =>
+        c is TextBoxBase or UpDownBase
+        || c?.GetType().Name.Contains("UpDown", StringComparison.Ordinal) == true
+        || (c is ComboBox cb && cb.DropDownStyle != ComboBoxStyle.DropDownList);
 
     /// <summary>把一次翻转/旋转作用到当前画笔和光标下的格子。</summary>
     void ApplyOrientation(Keys key)
@@ -204,8 +245,11 @@ internal sealed class MainForm : Form
     }
 
     /// <summary>
-    /// S：在「跟随瓦片 → 总是挡 → 可穿过 → 平台」之间循环。
+    /// S：在「跟随瓦片 → 总是挡 → 可穿过 → 平台 → 箱子」之间循环。
     /// 同时改画笔（之后画的都带这个标记）和光标下的那一格。
+    ///
+    /// 箱子标记允许打在**空气格**上（箱子本来就该放在空瓦片格里），
+    /// 所以这里对空格也生效 —— 以前空格会被直接跳过。
     /// </summary>
     void CycleBrushSolid()
     {
@@ -214,22 +258,33 @@ internal sealed class MainForm : Form
             -1 => 1,
             1 => 0,
             0 => 2,
+            2 => 3,
             _ => -1,
         };
-        _solidBox.SelectedIndex = _brushSolid switch { 1 => 1, 0 => 2, 2 => 3, _ => 0 };
+        _solidBox.SelectedIndex = SolidBoxIndex(_brushSolid);
 
         var p = CurPiece;
         string? hint = null;
-        if (p != null && _hoverCell is Point hc && !PieceDoc.IsAir(p.GetCell(hc.X, hc.Y)))
+        if (p != null && _hoverCell is Point hc)
         {
-            PushUndo();
-            int next = p.GetSolid(hc.X, hc.Y) switch
+            bool air = PieceDoc.IsAir(p.GetCell(hc.X, hc.Y));
+            int cur = p.GetSolid(hc.X, hc.Y);
+
+            // 空格上只有「箱子」这一种标记说得通（箱子本来就该放在空瓦片格里），
+            // 挡 / 平台 / 可穿过 打在空气上只会变成看不见的墙，别让快捷键顺带造坑。
+            if (air && _brushSolid != (int)SolidKind.Crate)
             {
-                -1 => 1,
-                1 => 0,
-                0 => 2,
-                _ => -1,
-            };
+                RefreshStatus("空格只认「箱子」标记：把画笔阻挡切到「箱子」，或用「箱子」工具");
+                _canvas.Invalidate();
+                _layoutPanel.Invalidate();
+                return;
+            }
+
+            int next = air
+                ? (cur == (int)SolidKind.Crate ? -1 : (int)SolidKind.Crate)
+                : cur switch { -1 => 1, 1 => 0, 0 => 2, 2 => 3, _ => -1 };
+
+            PushUndo();
             p.SetSolid(hc.X, hc.Y, next);
             MarkDirty();
             hint = $"({hc.X},{hc.Y}) 阻挡：{SolidName(next)}";
@@ -239,6 +294,9 @@ internal sealed class MainForm : Form
         _canvas.Invalidate();
         _layoutPanel.Invalidate();
     }
+
+    /// <summary>阻挡值 ↔ 左侧下拉框下标。</summary>
+    static int SolidBoxIndex(int solid) => solid switch { 1 => 1, 0 => 2, 2 => 3, 3 => 4, _ => 0 };
 
     /// <summary>D：切换「变暗」。</summary>
     void ToggleBrushDim()
@@ -267,6 +325,7 @@ internal sealed class MainForm : Form
         1 => "挡",
         0 => "可穿过",
         2 => "平台",
+        3 => "箱子",
         _ => "跟随瓦片",
     };
 
@@ -358,12 +417,13 @@ internal sealed class MainForm : Form
             "阻挡：总是挡",
             "阻挡：可穿过",
             "阻挡：平台（下穿上站·侧面不挡）",
+            "阻挡：箱子（可推动、会下落，放在空格上）",
         });
         _solidBox.SetBounds(10, 22, 206, 24);
         _solidBox.SelectedIndex = 0;
         _solidBox.SelectedIndexChanged += (_, _) =>
         {
-            _brushSolid = _solidBox.SelectedIndex switch { 1 => 1, 2 => 0, 3 => 2, _ => -1 };
+            _brushSolid = _solidBox.SelectedIndex switch { 1 => 1, 2 => 0, 3 => 2, 4 => 3, _ => -1 };
             RefreshStatus();
         };
         markBox.Controls.Add(_solidBox);
@@ -380,7 +440,7 @@ internal sealed class MainForm : Form
         });
         _left.Controls.Add(markBox);
 
-        var tools = new GroupBox { Text = "工具", Left = 8, Top = 440, Width = 226, Height = 128 };
+        var tools = new GroupBox { Text = "工具", Left = 8, Top = 440, Width = 226, Height = 154 };
         AddTool(tools, "画笔", "paint", 10, 20, true);
         AddTool(tools, "橡皮", "erase", 114, 20);
         AddTool(tools, "出生点", "spawn", 10, 46);
@@ -389,11 +449,12 @@ internal sealed class MainForm : Form
         AddTool(tools, "擦事件", "noevt", 114, 72);
         AddTool(tools, "框选", "select", 10, 98);
         AddTool(tools, "选中", "pick", 114, 98);
+        AddTool(tools, "箱子", "crate", 10, 124);
         _left.Controls.Add(tools);
 
-        Lbl(_left, "格子大小（像素）", 8, 578);
+        Lbl(_left, "格子大小（像素）", 8, 604);
         _cellBox.Minimum = 12; _cellBox.Maximum = 48; _cellBox.Value = 24;
-        Put(_left, _cellBox, 8, 598, 100, 24);
+        Put(_left, _cellBox, 8, 624, 100, 24);
         _cellBox.ValueChanged += (_, _) =>
         {
             _cell = (int)_cellBox.Value;
@@ -401,13 +462,14 @@ internal sealed class MainForm : Form
         };
 
         // 图例不再单独开窗口：右边整张图集就是调色板，点一格就能画。
-        // 瓦片的默认物理属性（实心 / 平台 / 水 / 梯子 / 弹簧）统一在瓦片默认值工具里改。
-        Lbl(_left, "点右侧图集选瓦片；默认属性在「瓦片默认值编辑器」里改。", 8, 630);
-        Lbl(_left, "左键绘制，右键擦除；Ctrl+滚轮缩放。", 8, 652);
-        Lbl(_left, "框选工具 / Shift+拖拽 选区（会自动切到框选）。", 8, 674);
-        Lbl(_left, "有选区时左键拖拽=整体移动；想继续画先 Esc。", 8, 696);
-        Lbl(_left, "Ctrl+X/C/V 剪切复制粘贴，方向键逐格移动。", 8, 718);
-        Lbl(_left, "「事件」=设为单条，「加事件」=往这格追加一条。", 8, 740);
+        // 瓦片的默认物理属性（实心 / 平台 / 水 / 梯子 / 弹簧 / 压力板）统一在瓦片默认值工具里改。
+        Lbl(_left, "点右侧图集选瓦片；默认属性在「瓦片默认值编辑器」里改。", 8, 656);
+        Lbl(_left, "左键绘制，右键擦除；Ctrl+滚轮缩放。", 8, 678);
+        Lbl(_left, "框选工具 / Shift+拖拽 选区（会自动切到框选）。", 8, 700);
+        Lbl(_left, "有选区时左键拖拽=整体移动；想继续画先 Esc。", 8, 722);
+        Lbl(_left, "Ctrl+X/C/V 剪切复制粘贴，方向键逐格移动。", 8, 744);
+        Lbl(_left, "「事件」=设为单条，「加事件」=往这格追加一条。", 8, 766);
+        Lbl(_left, "「箱子」直接点在空格上；箱子会挡住玩家、可推、会下落。", 8, 788);
 
         // ---- 右侧：地图编辑 / 拼接预览 ----
         var pageEdit = new TabPage("地图编辑");
@@ -780,7 +842,11 @@ internal sealed class MainForm : Form
     }
 
     /// <summary>把瓦片默认的物理属性说成一个词，状态栏 / 画布提示共用。</summary>
-    static string DefaultKindName(TileMeta m) => m.Solid ? "实心" : m.Platform ? "平台" : "可穿过";
+    static string DefaultKindName(TileMeta m)
+    {
+        string kind = m.Solid ? "实心" : m.Platform ? "平台" : "可穿过";
+        return m.Plate ? kind + "·压力板" : kind;
+    }
 
     /// <summary>把朝向编码说成人话，状态栏用。</summary>
     static string XfName(int xf)
@@ -795,7 +861,7 @@ internal sealed class MainForm : Form
     {
         "paint" => "画笔", "erase" => "橡皮", "spawn" => "出生点",
         "evt" => "事件", "evtadd" => "加事件", "select" => "框选",
-        "pick" => "选中", _ => "擦事件",
+        "pick" => "选中", "crate" => "箱子", _ => "擦事件",
     };
 
     void AddPiece()
@@ -1106,6 +1172,14 @@ internal sealed class MainForm : Form
                 DrawTile(g, p, c, new Rectangle(x * _cell, y * _cell, _cell, _cell), 1f, x, y);
             }
 
+        // 箱子写在 solid 层里，格子本身是空气 → 上面那一圈画不到它，单独补一遍
+        for (int y = 0; y < p.Height; y++)
+            for (int x = 0; x < p.Width; x++)
+            {
+                if (p.IsCrate(x, y)) DrawCrateMark(g, new Rectangle(x * _cell, y * _cell, _cell, _cell));
+                if (IsPlateCell(p, x, y)) DrawPlateMark(g, x, y);
+            }
+
         using (var pen = new Pen(Color.FromArgb(48, 53, 66)))
         {
             for (int x = 0; x <= p.Width; x++) g.DrawLine(pen, x * _cell, 0, x * _cell, p.Height * _cell);
@@ -1197,6 +1271,37 @@ internal sealed class MainForm : Form
     }
 
     static bool IsAir(char c) => c == '.' || c == ' ';
+
+    /// <summary>这一格的图例是不是压力板（图例显式写了 plate，或跟随 tiles.meta.json 的默认）。</summary>
+    bool IsPlateCell(PieceDoc p, int x, int y)
+    {
+        char c = p.GetCell(x, y);
+        if (IsAir(c)) return false;
+        return _doc.Tiles.TryGetValue(c.ToString(), out var t) && t.EffectivePlateFlag;
+    }
+
+    /// <summary>画一个箱子（solid 层写了 '3' 的格子）。素材缺失时退化成褐色方块。</summary>
+    void DrawCrateMark(Graphics g, Rectangle dst)
+    {
+        if (_crate != null)
+        {
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(_crate, dst);
+            return;
+        }
+        using var br = new SolidBrush(Color.FromArgb(220, 150, 96, 56));
+        g.FillRectangle(br, dst);
+        using var pen = new Pen(Color.FromArgb(230, 60, 36, 24), 2);
+        g.DrawRectangle(pen, dst);
+    }
+
+    /// <summary>压力板：格子内圈描一条青线，一眼看出哪几格是板（不影响贴图本身）。</summary>
+    void DrawPlateMark(Graphics g, int x, int y)
+    {
+        using var pen = new Pen(Color.FromArgb(170, 110, 225, 240), 1);
+        g.DrawRectangle(pen, x * _cell + 1, y * _cell + 1, _cell - 3, _cell - 3);
+    }
 
     void Mark(Graphics g, int x, int y, string text, Color color)
     {
@@ -1476,6 +1581,15 @@ internal sealed class MainForm : Form
                 p.SetEvtSeq(x, y, -1);
                 break;
             case "spawn": p.Spawn = new[] { x, y }; break;
+            case "crate":
+                // 箱子按口径占的是**空瓦片格**：图 / 变体 / 朝向 / 压暗一并清掉，
+                // 只留 solid 层的 '3'。要撤掉就把橡皮刷上去。
+                p.SetCell(x, y, '.');
+                p.SetVar(x, y, -1);
+                p.SetXf(x, y, 0);
+                p.SetSolid(x, y, (int)SolidKind.Crate);
+                p.SetDim(x, y, false);
+                break;
             case "evt":
             {
                 if (_evtIndex < 0) { RefreshStatus("先在「网格事件」页里选一条事件"); break; }
@@ -1601,6 +1715,17 @@ internal sealed class MainForm : Form
     internal int EventCount => _doc.Events.Count;
     internal int EventListRows => _eventList.Items.Count;
     internal int EvtIndex => _evtIndex;
+
+    /// <summary>
+    /// 给 --uicheck 用：走真实的"点列表切换事件"路径，返回切换后
+    /// 选中的下标和右边名称框是不是都指到了那一条。
+    /// </summary>
+    internal bool SelectEventRow(int index)
+    {
+        if (index < 0 || index >= _eventList.Items.Count) return false;
+        _eventList.SelectedIndex = index;
+        return _evtIndex == index && _evtName.Text == _doc.Events[index].Name;
+    }
 
     void PasteAtMouse()
     {
@@ -1751,6 +1876,17 @@ internal sealed class MainForm : Form
                         Wrap(cam.X + x, p.Width), Wrap(cam.Y + y, p.Height));
                 }
 
+            // 箱子：solid 层里的 '3'，格子里没有图，得单独补一遍
+            for (int y = 0; y < ViewTilesY; y++)
+                for (int x = 0; x < ViewTilesX; x++)
+                {
+                    int mx = Wrap(cam.X + x, p.Width);
+                    int my = Wrap(cam.Y + y, p.Height);
+                    if (!p.IsCrate(mx, my)) continue;
+                    DrawCrateMark(g, new Rectangle(rect.X + x * LayoutUnit, rect.Y + y * LayoutUnit,
+                        LayoutUnit, LayoutUnit));
+                }
+
             using var pen = new Pen(i == _dragIndex ? Color.Orange : Color.SteelBlue, 2);
             g.DrawRectangle(pen, rect);
             string label = $"{i + 1}. {p.Id}";
@@ -1857,6 +1993,9 @@ internal sealed class MainForm : Form
         _eventList.SelectedIndexChanged += (_, _) =>
         {
             if (_evtSyncing) return;
+            // 切到另一条事件时**必须**把 _evtIndex 跟着改：右边那些编辑框全是按
+            // CurEvent（= _doc.Events[_evtIndex]）读写的，不改的话点哪条都在改原来那条。
+            _evtIndex = _eventList.SelectedIndex;
             SyncEventEditor();
             RefreshStatus();
         };
@@ -1911,15 +2050,65 @@ internal sealed class MainForm : Form
 
         Lbl(right, "触发器（什么时候判）", 14, 66, 200);
         _evtTrigger.DropDownStyle = ComboBoxStyle.DropDownList;
-        _evtTrigger.Items.AddRange(new object[] { "触碰（角色进入该格）" });
+        _evtTrigger.Items.AddRange(new object[]
+        {
+            "触碰（角色进入这一格）",
+            "压力板（这块板被玩家或箱子压住）",
+        });
         _evtTrigger.SelectedIndex = 0;
-        Put(right, _evtTrigger, 14, 86, 200, 24);
+        _evtTrigger.SelectedIndexChanged += (_, _) =>
+        {
+            if (_evtSyncing || CurEvent is not EventDoc ev) return;
+            ev.Trigger = _evtTrigger.SelectedIndex == 1 ? "plate" : "touch";
+            if (ev.Trigger == "plate") EnsurePlateRef(ev);
+            MarkDirty();
+            _eventList.Invalidate();
+            SyncPlateEditor();
+        };
+        Put(right, _evtTrigger, 14, 86, 300, 24);
+
+        // ---- 压力板：填哪一块板（地图块 + 格）。留空的图块 = 用事件绑定格所在的那块 ----
+        Put(right, _platePiece, 14, 116, 190, 24);
+        _platePiece.DropDownStyle = ComboBoxStyle.DropDownList;
+        _platePiece.SelectedIndexChanged += (_, _) =>
+        {
+            if (_evtSyncing || CurEvent?.Plate is not PlateRefDoc p) return;
+            p.Piece = _platePiece.SelectedIndex <= 0 ? "" : _platePiece.SelectedItem as string ?? "";
+            MarkDirty();
+            _eventList.Invalidate();
+        };
+
+        right.Controls.Add(new Label { Text = "X", Left = 212, Top = 120, Width = 14, Height = 20 });
+        Put(right, _plateX, 228, 116, 56, 24);
+        right.Controls.Add(new Label { Text = "Y", Left = 290, Top = 120, Width = 14, Height = 20 });
+        Put(right, _plateY, 306, 116, 56, 24);
+
+        foreach (var n in new[] { _plateX, _plateY })
+        {
+            n.Minimum = 0;
+            n.Maximum = 400;
+            n.ValueChanged += (_, _) =>
+            {
+                if (_evtSyncing || CurEvent?.Plate is not PlateRefDoc p) return;
+                p.X = (int)_plateX.Value;
+                p.Y = (int)_plateY.Value;
+                MarkDirty();
+                _eventList.Invalidate();
+            };
+        }
+
+        right.Controls.Add(new Label
+        {
+            Left = 370, Top = 120, Width = 110, Height = 20,
+            ForeColor = SystemColors.GrayText,
+            Text = "板被压住 = 激活",
+        });
 
         // ---- 动作（任务计划程序里的"操作"）----
         var actBox = new GroupBox
         {
             Text = "动作（按顺序执行；地图一被切走，后面的就不再执行）",
-            Left = 14, Top = 120, Width = 470, Height = 256,
+            Left = 14, Top = 154, Width = 470, Height = 256,
         };
 
         _actList.SetBounds(12, 22, 446, 100);
@@ -1932,10 +2121,20 @@ internal sealed class MainForm : Form
 
         actBox.Controls.Add(new Label { Text = "类型", Left = 12, Top = 136, Width = 34, Height = 20 });
         _actType.DropDownStyle = ComboBoxStyle.DropDownList;
-        _actType.Items.AddRange(new object[] { "跳转到指定关卡", "执行命令 / 打开链接" });
+        _actType.Items.AddRange(new object[]
+        {
+            "跳转到指定关卡",
+            "执行命令 / 打开链接",
+            "隐藏本格图块（不再阻挡）",
+        });
         _actType.SetBounds(50, 132, 150, 24);
         _actType.SelectedIndex = 0;
-        _actType.SelectedIndexChanged += (_, _) => { if (!_evtSyncing) SyncActTargetHints(); };
+        _actType.SelectedIndexChanged += (_, _) =>
+        {
+            if (_evtSyncing) return;
+            SyncActTargetHints();
+            ApplyActTypeEnable();
+        };
         actBox.Controls.Add(_actType);
 
         actBox.Controls.Add(new Label { Text = "目标", Left = 208, Top = 136, Width = 34, Height = 20 });
@@ -1966,7 +2165,7 @@ internal sealed class MainForm : Form
         var condBox = new GroupBox
         {
             Text = "条件：摄像机滚动（取景框左上角，单位格）",
-            Left = 14, Top = 386, Width = 470, Height = 356,
+            Left = 14, Top = 420, Width = 470, Height = 356,
         };
 
         _condList.SetBounds(12, 22, 446, 140);
@@ -2086,7 +2285,7 @@ internal sealed class MainForm : Form
                 c.Enabled = on;
 
             _evtName.Text = ev?.Name ?? "";
-            _evtTrigger.SelectedIndex = 0;                                  // 目前只有触碰一种
+            _evtTrigger.SelectedIndex = ev?.Trigger == "plate" ? 1 : 0;
 
             RefreshActList(ev);
             RefreshCondList(ev);
@@ -2095,6 +2294,58 @@ internal sealed class MainForm : Form
 
         SyncActEditor();
         SyncCondEditor();
+        SyncPlateEditor();
+    }
+
+    /// <summary>
+    /// 压力板那一排控件：地图块下拉 + X / Y。只有"压力板"触发器才给编辑，
+    /// 其他触发器整排灰掉（还留着值，切回去不用重填）。
+    /// </summary>
+    void SyncPlateEditor()
+    {
+        _evtSyncing = true;
+        try
+        {
+            var ev = CurEvent;
+            bool plate = ev?.Trigger == "plate";
+
+            _platePiece.BeginUpdate();
+            _platePiece.Items.Clear();
+            _platePiece.Items.Add("(绑定格所在图块)");
+            foreach (var p in _doc.Pieces) _platePiece.Items.Add(p.Id);
+            _platePiece.EndUpdate();
+
+            var plateRef = ev?.Plate;
+            int at = 0;
+            if (plateRef != null && !string.IsNullOrEmpty(plateRef.Piece))
+            {
+                int found = _platePiece.Items.IndexOf(plateRef.Piece);
+                at = found >= 0 ? found : 0;
+            }
+            _platePiece.SelectedIndex = at;
+
+            _plateX.Value = Math.Clamp(plateRef?.X ?? 0, 0, 400);
+            _plateY.Value = Math.Clamp(plateRef?.Y ?? 0, 0, 400);
+
+            _platePiece.Enabled = plate;
+            _plateX.Enabled = plate;
+            _plateY.Enabled = plate;
+        }
+        finally { _evtSyncing = false; }
+    }
+
+    /// <summary>
+    /// 切到"压力板"触发器时还没有板参数：给一份默认值 ——
+    /// 地图块取当前这块，坐标取最近点过的那一格（刚点的多半就是那块板）。
+    /// </summary>
+    void EnsurePlateRef(EventDoc ev)
+    {
+        if (ev.Plate != null) return;
+
+        int x = 0, y = 0;
+        if (_evtCell is Point c && _evtCellPiece == _pieceIndex) { x = c.X; y = c.Y; }
+
+        ev.Plate = new PlateRefDoc { Piece = CurPiece?.Id ?? "", X = x, Y = y };
     }
 
     // ---------- 动作列表 ----------
@@ -2139,17 +2390,38 @@ internal sealed class MainForm : Form
             int i = _actList.SelectedIndex;
             var acts = CurEvent?.Actions;
             var act = acts != null && i >= 0 && i < acts.Count ? acts[i] : null;
-            bool on = act != null;
 
-            _actType.Enabled = _actTarget.Enabled = _actArgs.Enabled = on;
-            _actType.SelectedIndex = act == null ? 1 : act.Type == "goto" ? 0 : 1;
+            _actType.Enabled = act != null;
+            _actType.SelectedIndex = act == null ? 1 : ActTypeIndexOf(act.Type);
             SyncActTargetHints();
+            ApplyActTypeEnable();
 
             _actTarget.Text = act == null ? ""
-                : act.Type == "goto" ? act.Level : act.Target;
+                : act.Type == "goto" ? act.Level
+                : act.Type == "run" ? act.Target
+                : "";
             _actArgs.Text = act?.Args ?? "";
         }
         finally { _evtSyncing = false; }
+    }
+
+    /// <summary>动作类型 → 下拉框下标；认不出来的类型按"执行命令"显示。</summary>
+    static int ActTypeIndexOf(string type) => type switch
+    {
+        "goto" => 0,
+        "run" => 1,
+        "hide" => 2,
+        _ => 1,
+    };
+
+    /// <summary>"隐藏本格"不需要目标 / 参数，那两个框跟着灰掉。</summary>
+    void ApplyActTypeEnable()
+    {
+        bool on = CurEvent?.Actions is { } acts &&
+                  _actList.SelectedIndex >= 0 && _actList.SelectedIndex < acts.Count;
+        bool hide = _actType.SelectedIndex == 2;
+        _actTarget.Enabled = on && !hide;
+        _actArgs.Enabled = on && !hide;
     }
 
     /// <summary>目标那个下拉：跳关时把关卡名填成候选，执行命令时清空（直接手打路径/网址）。</summary>
@@ -2167,6 +2439,8 @@ internal sealed class MainForm : Form
     /// <summary>把动作编辑区读成一条动作。</summary>
     ActionDoc ReadActFromUi()
     {
+        if (_actType.SelectedIndex == 2) return new ActionDoc { Type = "hide" };
+
         string target = _actTarget.Text.Trim();
         return _actType.SelectedIndex == 0
             ? new ActionDoc { Type = "goto", Level = target }

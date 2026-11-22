@@ -704,7 +704,9 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": true,
+      "note": "默认是压力板：玩家或箱子与这一格重叠（身体所在格 / 脚底那格）就算踩下。不挡人，靠占用这一格来触发。"
     },
     {
       "sprite": 70,

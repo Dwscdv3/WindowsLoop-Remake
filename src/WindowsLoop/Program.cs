@@ -23,12 +23,17 @@ internal static class Program
             return;
         }
 
+        if (args.Length > 0 && args[0] == "--push-selftest")
+        {
+            PushSelfTest.Run();
+            return;
+        }
+
         if (args.Length > 0 && args[0] == "--audio-selftest")
         {
             AudioSelfTest.Run();
             return;
         }
-
         if (args.Length > 0 && args[0] == "--audio-mix-test")
         {
             AudioSelfTest.RunMixTest();

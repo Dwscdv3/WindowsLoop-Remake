@@ -18,6 +18,8 @@ internal static class TileDefaultsSelfTest
 
         try
         {
+            // 和游戏启动走同一个入口：瓦片默认值是编在程序集里的，不再从磁盘找
+            Assets.LoadEmbeddedTileDefaults();
             var meta = TileDefaults.Current;
             lines.Add("meta: " + TileDefaults.PathUsed);
             lines.Add($"registered={meta.Tiles.Count} solid={meta.Tiles.Count(t => t.Solid)}");
@@ -96,6 +98,47 @@ internal static class TileDefaultsSelfTest
             Check(lines, ref fail, "逐格 '2' 把平台标成单向平台", cellPlatform);
             Check(lines, ref fail, "图例同时 solid+platform 时按实心算", solidWins);
             Check(lines, ref fail, "平台不算 SolidAt（横向 / 交接不挡）", notSolid && notPlatform);
+
+            // ---- 压力板：69 号瓦片默认是板，图例也能显式改 ----
+            bool plate69 = meta.Find(69)?.Plate ?? false;
+            File.WriteAllText(tmp,
+                "{\"name\":\"selftest\",\"maxWindows\":1," +
+                "\"tiles\":{\"a\":{\"sprite\":69},\"b\":{\"sprite\":69,\"plate\":false}," +
+                "\"c\":{\"sprite\":8,\"plate\":true}}," +
+                "\"pieces\":[{\"id\":\"p\",\"rows\":[\"abc\"],\"spawn\":[0,0]}]}");
+            Level.Load(tmp);
+            Check(lines, ref fail, "69 号瓦片默认是压力板", plate69);
+            Check(lines, ref fail, "图例没写 plate 时跟随默认（是板）", TileSet.Defs[TileSet.IdOf('a')].Plate);
+            Check(lines, ref fail, "图例显式 plate:false 覆盖默认（不是板）", !TileSet.Defs[TileSet.IdOf('b')].Plate);
+            Check(lines, ref fail, "普通瓦片显式 plate:true 也是板", TileSet.Defs[TileSet.IdOf('c')].Plate);
+
+            // ---- 箱子：solid 层写 '3' 的格子抽成实体，静态层让位 ----
+            File.WriteAllText(tmp,
+                "{\"name\":\"selftest\",\"maxWindows\":1," +
+                "\"tiles\":{\"g\":{\"sprite\":9,\"solid\":true},\"P\":{\"sprite\":69}}," +
+                "\"pieces\":[{\"id\":\"p\",\"rows\":[\".g..\"]," +
+                "\"solid\":[\"3.3.\"],\"spawn\":[1,0]}]}");
+            var crateLevel = Level.Load(tmp);
+            var cp = crateLevel.Pieces[0];
+            bool spawns = cp.CrateSpawns.Count == 2 &&
+                          cp.CrateSpawns[0] == new System.Drawing.Point(0, 0) &&
+                          cp.CrateSpawns[1] == new System.Drawing.Point(2, 0);
+            bool entities = crateLevel.Crates.Count == 2 &&
+                            crateLevel.Crates[0].CellX == 0 && crateLevel.Crates[1].CellX == 2;
+            bool yielded = cp.KindAt(0, 0) == SolidKind.Pass;   // 静态层清成 255 → 跟瓦片（空气）
+            bool notStatic = !cp.SolidAt(0, 0);
+            Check(lines, ref fail, "solid 层 '3' 读成箱子（位置对）", spawns);
+            Check(lines, ref fail, "读关卡时就建出箱子实体", entities);
+            Check(lines, ref fail, "箱子格在静态图层里让位（不双重阻挡）", yielded && notStatic);
+
+            // 推动 / 重开：ResetCrates 要把箱子摆回关卡里写的位置
+            crateLevel.Crates[0].CellX = 5;
+            crateLevel.Crates[0].Y = 3.7f;
+            crateLevel.ResetCrates();
+            Check(lines, ref fail, "ResetCrates 把箱子摆回原位",
+                crateLevel.Crates[0].CellX == 0 && crateLevel.Crates[0].Y == 0f &&
+                crateLevel.Crates[1].CellX == 2);
+
         }
         catch (Exception ex)
         {

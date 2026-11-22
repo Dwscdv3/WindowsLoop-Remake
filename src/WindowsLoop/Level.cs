@@ -21,6 +21,12 @@ internal sealed class TileDef
     public bool Climb;
 
     /// <summary>
+    /// 压力板：玩家或箱子与这一格重叠（身体所在格 / 脚底那格）就算"踩下"。
+    /// 它不改变阻挡，只是一条给事件触发器读的状态。
+    /// </summary>
+    public bool Plate;
+
+    /// <summary>
     /// 取这一格用哪个 sprite。variant 为该格显式指定的下标（关卡 var 层），
     /// 没指定（-1）时退回老的坐标哈希。
     /// </summary>
@@ -87,10 +93,18 @@ internal sealed class Piece
     public byte[]? Xf;
 
     /// <summary>
-    /// 每格是否阻挡：0 = 可穿过，1 = 实心，2 = 单向平台，255 = 跟随瓦片自带的 solid / platform。
+    /// 每格是否阻挡：0 = 可穿过，1 = 实心，2 = 单向平台，3 = 箱子，255 = 跟随瓦片自带的 solid / platform。
     /// 阻挡是**格子**的属性而不是瓦片的——同一块瓦片可以这格挡人、那格不挡。
+    /// 3（箱子）在 <see cref="Level.Parse"/> 里会被抽成 <see cref="Crate"/> 实体：
+    /// 数据上它占这一格，运行时要动的是实体，静态层那一位随即清成 255。
     /// </summary>
     public byte[]? Solid;
+
+    /// <summary>
+    /// 关卡里写的那批箱子（solid 层为 3 的格子）。运行时箱子的位置归 <see cref="Level.Crates"/>，
+    /// 这里只留"这一局开始时它们在哪"，按 R 重开时照这份重置。
+    /// </summary>
+    public readonly List<Point> CrateSpawns = new();
 
     /// <summary>
     /// 每格是否压暗绘制，对应以前的"背景层"。0 = 正常亮度，1 = 压暗。
@@ -146,6 +160,7 @@ internal sealed class Piece
             byte v = Solid[i];
             if (v == (byte)SolidKind.Block) return SolidKind.Block;
             if (v == (byte)SolidKind.Platform) return SolidKind.Platform;
+            if (v == (byte)SolidKind.Crate) return SolidKind.Crate;
             if (v == (byte)SolidKind.Pass) return SolidKind.Pass;
         }
 
@@ -153,8 +168,24 @@ internal sealed class Piece
         return def.Solid ? SolidKind.Block : def.Platform ? SolidKind.Platform : SolidKind.Pass;
     }
 
-    /// <summary>这一格挡不挡四面（实心）。单向平台不算，它只在下落时由 CollidesFalling 处理。</summary>
-    public bool SolidAt(int x, int y) => KindAt(x, y) == SolidKind.Block;
+    /// <summary>
+    /// 这一格挡不挡四面（实心）。单向平台不算，它只在下落时由 CollidesFalling 处理。
+    /// 箱子也算 —— 它挡人和实心一样，只是会动；真正跑起来时箱子的位置由实体决定
+    /// （见 <see cref="Level.Crates"/>），静态层里那一位读关卡时就已经清掉了。
+    /// </summary>
+    public bool SolidAt(int x, int y)
+    {
+        var k = KindAt(x, y);
+        return k is SolidKind.Block or SolidKind.Crate;
+    }
+
+    /// <summary>这一格是不是压力板（瓦片自带的 plate 属性）。</summary>
+    public bool PlateAt(int x, int y)
+    {
+        int wx = ((x % Width) + Width) % Width;
+        int wy = ((y % Height) + Height) % Height;
+        return TileSet.Defs[Cells[wy * Width + wx]].Plate;
+    }
 
     /// <summary>这一格是不是单向平台。</summary>
     public bool PlatformAt(int x, int y) => KindAt(x, y) == SolidKind.Platform;
@@ -180,21 +211,31 @@ internal sealed class Piece
 }
 
 /// <summary>
-/// 网格事件的触发方式。目前只有"触碰"：角色所在的那一格挂着事件就每帧判一次。
+/// 网格事件的触发方式。
+///
+/// Touch  —— 角色所在的那一格挂着事件就每帧判一次（"走进来"）。
+/// Plate  —— 事件里写的那个压力板被踩住（玩家或箱子压在上面）时算激活；
+///           松开就不激活。它读的是状态而不是"进过一次"，所以隐藏类操作能随时收回。
+///
 /// 以后要加"进入房间""按下某键"之类，在这里扩枚举 + UpdateEvents 里分派。
 /// </summary>
 internal enum EventTrigger
 {
     Touch,
+    Plate,
 }
 
 /// <summary>
-/// 一条动作。对着任务计划程序里的"操作"：跳转到别的关卡，或者在电脑上打开程序 / 网址。
-/// 一条事件可以挂多条，按顺序执行；某条把地图切走了，后面的就不再执行。
+/// 一条动作。对着任务计划程序里的"操作"：跳转到别的关卡，在电脑上打开程序 / 网址，
+/// 或者把一个图块藏起来。一条事件可以挂多条，按顺序执行；某条把地图切走了，后面的就不再执行。
 /// </summary>
 internal sealed class EventActionDef
 {
-    /// <summary>"goto" = 跳转关卡，"run" = 执行命令 / 打开网址。</summary>
+    /// <summary>
+    /// "goto" = 跳转关卡，"run" = 执行命令 / 打开网址，
+    /// "hide" = 隐藏事件绑定格的图块并且不再阻挡（这是**状态**而不是一次性动作：
+    /// 事件不激活了，图块就回来）。
+    /// </summary>
     public string Type = "";
 
     /// <summary>goto 的目标关卡（assets/levels 下的文件名，不带 .json）。</summary>
@@ -229,10 +270,25 @@ internal sealed class GridEvent
     public string Name = "";
     public EventTrigger Trigger = EventTrigger.Touch;
 
+    /// <summary>
+    /// Trigger 为 <see cref="EventTrigger.Plate"/> 时要盯的那块压力板。
+    /// Piece 留空 = 用"事件绑定格"所在的那块地图（事件可能挂在好几块地图的格子上，
+    /// 这时按每块链接算，见 Game.BuildPlateRefs）。
+    /// </summary>
+    public string PlatePiece = "";
+    public int PlateX = -1;
+    public int PlateY = -1;
+
     /// <summary>按顺序执行的动作。空表 = 什么都不做（草稿）。</summary>
     public List<EventActionDef> Actions = new();
 
     public List<EventCondition> Conditions = new();
+
+    /// <summary>这条事件里有没有「隐藏绑定格」的操作 —— 有的话它绑定的格子要参与隐藏判定。</summary>
+    public bool Hides => Actions.Exists(a => a.Type == "hide");
+
+    /// <summary>只跑一次的动作（goto / run）。hide 是状态，不是一次性动作。</summary>
+    public IEnumerable<EventActionDef> OneShots => Actions.Where(a => a.Type != "hide");
 }
 
 internal sealed class Level
@@ -244,6 +300,20 @@ internal sealed class Level
     public List<GridEvent> Events = new();
 
     /// <summary>
+    /// 这一局里活着的箱子。位置由实体自己管，按 R 重开时从每个地图块的
+    /// <see cref="Piece.CrateSpawns"/> 重新摆一遍（见 <see cref="ResetCrates"/>）。
+    /// </summary>
+    public readonly List<Crate> Crates = new();
+
+    public void ResetCrates()
+    {
+        Crates.Clear();
+        foreach (var p in Pieces)
+            foreach (var c in p.CrateSpawns)
+                Crates.Add(new Crate(p, c.X, c.Y));
+    }
+
+    /// <summary>
     /// 格子事件组表：每一项是一串事件下标（有序，按顺序逐个判定）。
     /// evt 层里一格一个字符就是这个表的下标——这样"一格挂多个事件"仍然保持
     /// "一格一个字符"的层格式，框选复制 / 改尺寸那一套完全不用动。
@@ -253,10 +323,15 @@ internal sealed class Level
     /// <summary>这一关最多能开几个窗口。</summary>
     public int MaxWindows = 1;
 
-    public static Level Load(string path)
+    public static Level Load(string path) => Parse(File.ReadAllText(path));
+
+    /// <summary>
+    /// 从一段 JSON 直接解析。单文件分发时关卡是编在程序集里的资源，没有文件路径可传。
+    /// </summary>
+    public static Level Parse(string json)
     {
         TileSet.Reset();
-        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
         var level = new Level { Name = root.GetProperty("name").GetString() ?? "" };
@@ -282,6 +357,7 @@ internal sealed class Level
                 Water = ReadFlag(prop.Value, "water", sprites, m => m.Water),
                 Spring = ReadFlag(prop.Value, "spring", sprites, m => m.Spring),
                 Climb = ReadFlag(prop.Value, "climb", sprites, m => m.Climb),
+                Plate = ReadFlag(prop.Value, "plate", sprites, m => m.Plate),
             };
 
             TileSet.Register(prop.Name[0], def);
@@ -339,6 +415,18 @@ internal sealed class Level
             // 新格式的 dim 层覆盖旧 back 推导出来的结果
             piece.Dim = ParseNumericLayer(p, "dim", w, h, 0) ?? piece.Dim;
 
+            // 箱子：solid 层里的 '3'。抽成实体，并把这一位清成"跟随瓦片"——
+            // 之后箱子的位置归实体，静态图层不该再挡一次（不然推动了也走不过去）。
+            if (piece.Solid != null)
+            {
+                for (int i = 0; i < piece.Solid.Length; i++)
+                {
+                    if (piece.Solid[i] != (byte)SolidKind.Crate) continue;
+                    piece.CrateSpawns.Add(new Point(i % w, i / w));
+                    piece.Solid[i] = 255;
+                }
+            }
+
             var spawn = p.GetProperty("spawn");
             piece.Spawn = new Point(spawn[0].GetInt32(), spawn[1].GetInt32());
 
@@ -377,6 +465,7 @@ internal sealed class Level
             ? Math.Max(1, mx.GetInt32())
             : Math.Max(1, level.Pieces.Count);
 
+        level.ResetCrates();
         return level;
     }
 
@@ -394,9 +483,22 @@ internal sealed class Level
         if (e.TryGetProperty("trigger", out var trig) && trig.ValueKind == JsonValueKind.String)
             ev.Trigger = (trig.GetString() ?? "") switch
             {
-                "touch" => EventTrigger.Touch,
+                "plate" => EventTrigger.Plate,
                 _ => EventTrigger.Touch,
             };
+
+        // 压力板触发器的目标板：{"piece":"地图块","x":10,"y":8}，piece 可省（省略 = 绑定格所在的地图块）
+        if (e.TryGetProperty("plate", out var plate) && plate.ValueKind == JsonValueKind.Object)
+        {
+            if (plate.TryGetProperty("piece", out var pp) && pp.ValueKind == JsonValueKind.String)
+                ev.PlatePiece = pp.GetString() ?? "";
+            if (plate.TryGetProperty("x", out var px) && px.ValueKind == JsonValueKind.Number)
+                ev.PlateX = px.GetInt32();
+            if (plate.TryGetProperty("y", out var py) && py.ValueKind == JsonValueKind.Number)
+                ev.PlateY = py.GetInt32();
+        }
+        // 写了 plate 触发器却没给坐标：这块板不存在，永远不激活。
+        // 故意不退化成"触碰"——那会让一条配错的板事件变成踩上去就跳关，更难查。
 
         // 新格式 actions: [...]；旧格式 action: {...} 当成只有一条动作的事件读
         if (e.TryGetProperty("actions", out var acts) && acts.ValueKind == JsonValueKind.Array)

@@ -19,6 +19,37 @@
     <Compile Include="..\Shared\TileMeta.cs" Link="Shared\TileMeta.cs" />
   </ItemGroup>
 
+  <!-- 素材编进程序集：单文件分发时 exe 旁边不带任何目录，运行时由 Assets.cs 从内存读。
+       逻辑名统一成 asset/<assets 下的相对路径>，Assets.cs 按这个前缀查表。
+       下面 xcopy 那一段仍在，是给关卡编辑器 / 瓦片工具和手工比对留的副本，游戏自己不再读它。 -->
+  <ItemGroup>
+    <EmbeddedResource Include="assets\levels\*.json" LogicalName="asset/levels/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="assets\tiles.png" LogicalName="asset/tiles.png" />
+    <EmbeddedResource Include="assets\player.png" LogicalName="asset/player.png" />
+    <!-- 箱子：16x16，一格一张，和 player.png 一样单独放，不参与图集打包（TILE_MAP 是固定索引） -->
+    <EmbeddedResource Include="assets\crate.png" LogicalName="asset/crate.png" />
+    <EmbeddedResource Include="assets\tiles.meta.json" LogicalName="asset/tiles.meta.json" />
+    <!-- 音频内嵌策略：m4a / mp3 全打；wav 只打「没有同名有损版」的那些。
+         因为 AudioManager.Resolve 的扩展名优先级是 .m4a → .aac → .mp3 → .wav，
+         有 m4a 时 wav 永远读不到，再打进程序集就是纯占体积
+         （11 个音效 wav 合计约 2.8MB，90MB 的 BGM 源 WAV 更是本来就不该进包）。 -->
+    <EmbeddedResource Include="assets\audio\*.m4a;assets\audio\*.mp3"
+                      LogicalName="asset/audio/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="assets\audio\*.wav"
+                      LogicalName="asset/audio/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- 打包前把「有同名 m4a」的 wav 从内嵌列表里剔掉。
+       规则不写死文件名：删掉某个 m4a 后，对应 wav 会自动回到包里。
+       静态 ItemGroup 的 Condition 不允许引用内置元数据（MSB4190），所以放进 target 走批处理。 -->
+  <Target Name="ExcludeRedundantWav" BeforeTargets="PrepareResources">
+    <ItemGroup>
+      <_AudioWav Include="assets\audio\*.wav" />
+      <_AudioWavRedundant Include="@(_AudioWav)" Condition="Exists('assets\audio\%(Filename).m4a')" />
+      <EmbeddedResource Remove="@(_AudioWavRedundant)" />
+    </ItemGroup>
+  </Target>
+
   <!-- 资源用 xcopy 复制，不走 MSBuild 的 Copy 任务。
        本机上 Copy 任务只要需要"删除目标位置的旧文件"就会在 ParallelCopyTask 里栈溢出
        （exit 127），-m:1 也压不住。xcopy 直接覆盖、不先删，绕开这条路。
@@ -32,6 +63,8 @@
     <Exec Command="xcopy /Y /D /Q &quot;$(MSBuildProjectDirectory)\assets\gem.png&quot; &quot;$(OutDir)assets\&quot;"
           IgnoreExitCode="true" StandardOutputImportance="low" />
     <Exec Command="xcopy /Y /D /Q &quot;$(MSBuildProjectDirectory)\assets\player.png&quot; &quot;$(OutDir)assets\&quot;"
+          IgnoreExitCode="true" StandardOutputImportance="low" />
+    <Exec Command="xcopy /Y /D /Q &quot;$(MSBuildProjectDirectory)\assets\crate.png&quot; &quot;$(OutDir)assets\&quot;"
           IgnoreExitCode="true" StandardOutputImportance="low" />
     <Exec Command="xcopy /Y /D /Q &quot;$(MSBuildProjectDirectory)\assets\tiles.png&quot; &quot;$(OutDir)assets\&quot;"
           IgnoreExitCode="true" StandardOutputImportance="low" />

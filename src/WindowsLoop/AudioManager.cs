@@ -65,7 +65,6 @@ internal sealed class AudioManager : IDisposable
     /// <summary>混音格式：44.1kHz 立体声浮点，所有素材都对齐到这个格式再混。</summary>
     static readonly WaveFormat MixFormat = WaveFormat.CreateIeeeFloatWaveFormat(44100, 2);
 
-    readonly string _dir;
     readonly List<Voice> _oneShots = new();
     readonly Dictionary<Sfx, double> _lastPlay = new();
     readonly Dictionary<Sfx, int> _playCount = new();
@@ -106,11 +105,11 @@ internal sealed class AudioManager : IDisposable
     public (float PeakDb, float Rms, float Seconds, string Note) ProbeSfx(Sfx sfx)
     {
         if (!_map.TryGetValue(sfx, out var cfg)) return (0f, 0f, 0f, "没在 _map 里注册");
-        string? path = Resolve(cfg.Name);
-        if (path == null) return (0f, 0f, 0f, $"找不到素材 {cfg.Name}");
+        var clip = Resolve(cfg.Name);
+        if (clip == null) return (0f, 0f, 0f, $"找不到素材 {cfg.Name}");
 
         Voice voice;
-        try { voice = new Voice(path, false, Math.Max(0.0001f, cfg.Volume), MixFormat); }
+        try { voice = new Voice(clip, false, Math.Max(0.0001f, cfg.Volume), MixFormat); }
         catch (Exception ex) { return (0f, 0f, 0f, "解码失败 " + ex.GetType().Name); }
 
         try
@@ -135,7 +134,7 @@ internal sealed class AudioManager : IDisposable
             float seconds = count / (float)(MixFormat.SampleRate * channels);
             float peakDb = peak > 0 ? 20f * MathF.Log10(peak) : -999f;
             float rms = count > 0 ? (float)Math.Sqrt(sum / count) : 0f;
-            return (peakDb, rms, seconds, Path.GetFileName(path));
+            return (peakDb, rms, seconds, clip.Name);
         }
         finally { voice.Dispose(); }
     }
@@ -151,12 +150,12 @@ internal sealed class AudioManager : IDisposable
         float len = 0f;
         if (_map.TryGetValue(sfx, out var cfg))
         {
-            string? path = Resolve(cfg.Name);
-            if (path != null)
+            var clip = Resolve(cfg.Name);
+            if (clip != null)
             {
                 try
                 {
-                    using var reader = new MediaFoundationReader(path);
+                    using var reader = clip.Open();
                     len = (float)(reader.Length / (double)Math.Max(1, reader.WaveFormat.AverageBytesPerSecond));
                 }
                 catch { }
@@ -182,12 +181,12 @@ internal sealed class AudioManager : IDisposable
         var result = Array.Empty<float>();
         if (_map.TryGetValue(sfx, out var cfg))
         {
-            string? path = Resolve(cfg.Name);
-            if (path != null)
+            var clip = Resolve(cfg.Name);
+            if (clip != null)
             {
                 try
                 {
-                    using var reader = new MediaFoundationReader(path);
+                    using var reader = clip.Open();
                     ISampleProvider src = new SampleChannel(reader, false);
                     if (src.WaveFormat.Channels == 1) src = new MonoToStereoSampleProvider(src);
 
@@ -248,10 +247,9 @@ internal sealed class AudioManager : IDisposable
     }
 
     public bool Muted => _muted;
-    public string AudioDir => _dir;
 
-    /// <summary>BGM 放到这个路径就会自动接上（也认原名 windows-loop-bgm - final-fixed.*）。</summary>
-    public string BgmExpectedPath => Path.Combine(_dir, "bgm.m4a");
+    /// <summary>诊断用：素材来源。单文件分发后音频全部来自程序集内嵌资源。</summary>
+    public string AudioDir => "(embedded) asset/audio/";
 
     /// <summary>诊断用：BGM 当前播放位置（毫秒），-1 表示没有 BGM。</summary>
     public double BgmPositionMs => _bgm?.PositionMs ?? -1;
@@ -268,7 +266,7 @@ internal sealed class AudioManager : IDisposable
     /// <summary>诊断用：某个事件实际被接纳播放了多少次（被去抖挡下的不计数）。</summary>
     public int PlayedCount(Sfx sfx) => _playCount.TryGetValue(sfx, out int n) ? n : 0;
 
-    public AudioManager() => _dir = Game.AssetPath("audio");
+    public AudioManager() { }
 
     public void Start()
     {
@@ -298,12 +296,12 @@ internal sealed class AudioManager : IDisposable
         SfxEnvelope(Sfx.CantOpen);
     }
 
-    Voice? TryOpen(string? path, bool loop, float volume)
+    Voice? TryOpen(AudioClip? clip, bool loop, float volume)
     {
-        if (path == null || _mixer == null) return null;
+        if (clip == null || _mixer == null) return null;
         try
         {
-            var v = new Voice(path, loop, Effective(volume), MixFormat);
+            var v = new Voice(clip, loop, Effective(volume), MixFormat);
             _mixer.AddMixerInput(v.Volume);
             return v;
         }
@@ -345,8 +343,8 @@ internal sealed class AudioManager : IDisposable
             now - last < cfg.MinInterval)
             return;
 
-        string? path = Resolve(cfg.Name);
-        if (path == null) return;
+        var clip = Resolve(cfg.Name);
+        if (clip == null) return;
         _lastPlay[sfx] = now;
         _playCount[sfx] = PlayedCount(sfx) + 1;
 
@@ -357,7 +355,7 @@ internal sealed class AudioManager : IDisposable
 
         try
         {
-            var v = new Voice(path, false, Effective(cfg.Volume), MixFormat)
+            var v = new Voice(clip, false, Effective(cfg.Volume), MixFormat)
             {
                 MaxSeconds = cfg.MaxSeconds,
                 Tag = sfx,
@@ -400,14 +398,19 @@ internal sealed class AudioManager : IDisposable
     float Effective(float v) => _muted ? 0f : v * _master;
 
     /// <summary>给解码自测用：按基础名找素材。</summary>
-    public string? Find(string name) => Resolve(name);
+    public AudioClip? Find(string name) => Resolve(name);
 
-    string? Resolve(string name)
+    /// <summary>
+    /// 按「基础名 + 扩展名优先级」在程序集内嵌资源里找。原来这里是 File.Exists 探测，
+    /// 改成查 Assets 的表之后，单文件分发不再需要 exe 旁边有 assets\audio 目录。
+    /// </summary>
+    AudioClip? Resolve(string name)
     {
         foreach (string ext in Exts)
         {
-            string p = Path.Combine(_dir, name + ext);
-            if (File.Exists(p)) return p;
+            string rel = "audio/" + name + ext;
+            byte[]? data = Assets.Read(rel);
+            if (data != null) return new AudioClip(name + ext, data);
         }
         return null;
     }
@@ -449,11 +452,11 @@ internal sealed class AudioManager : IDisposable
         public float Elapsed;
         public float BaseVolume { get; }
 
-        public Voice(string path, bool loop, float volume, WaveFormat target)
+        public Voice(AudioClip clip, bool loop, float volume, WaveFormat target)
         {
             BaseVolume = volume;
             _loop = loop;
-            _reader = new MediaFoundationReader(path);
+            _reader = clip.Open();
 
             ISampleProvider src = new SampleChannel(_reader, false);
             if (src.WaveFormat.SampleRate != target.SampleRate)
@@ -523,20 +526,20 @@ internal static class AudioSelfTest
         };
         foreach (string name in names)
         {
-            string? path = am.Find(name);
-            if (path == null) { lines.Add($"{name}: (缺失)"); continue; }
+            var clip = am.Find(name);
+            if (clip == null) { lines.Add($"{name}: (缺失)"); continue; }
             try
             {
-                using var reader = new MediaFoundationReader(path);
+                using var reader = clip.Open();
                 var channel = new SampleChannel(reader, false);
                 var buffer = new float[4096];
                 int read = channel.Read(buffer.AsSpan());
                 reader.Position = 0;   // 循环播放会用到重定位
-                lines.Add($"{Path.GetFileName(path)}: OK format={reader.WaveFormat} read={read} reposition=OK");
+                lines.Add($"{clip.Name}: OK format={reader.WaveFormat} read={read} reposition=OK");
             }
             catch (Exception ex)
             {
-                lines.Add($"{Path.GetFileName(path)}: FAIL {ex.GetType().Name}: {ex.Message}");
+                lines.Add($"{clip.Name}: FAIL {ex.GetType().Name}: {ex.Message}");
             }
         }
 
@@ -680,4 +683,27 @@ internal static class AudioSelfTest
 
         File.WriteAllLines(Path.Combine(Path.GetTempPath(), "windowsloop-audio-mix-test.txt"), lines);
     }
+}
+
+/// <summary>
+/// 一段音频素材。单文件分发后素材编在程序集里，所以这里拿的是字节而不是路径。
+/// 解码仍旧交给 Windows 自带的 Media Foundation，只是换成走内存的
+/// <see cref="StreamMediaFoundationReader"/>，不需要在磁盘上落任何临时文件。
+/// </summary>
+internal sealed class AudioClip
+{
+    readonly byte[] _data;
+
+    /// <summary>文件名，只用于日志和自测输出。</summary>
+    public string Name { get; }
+
+    public AudioClip(string name, byte[] data)
+    {
+        Name = name;
+        _data = data;
+    }
+
+    /// <summary>每次播放 / 分析都开一条新解码器：读端有游标，不能共用。</summary>
+    public MediaFoundationReader Open() =>
+        new StreamMediaFoundationReader(new MemoryStream(_data, writable: false));
 }

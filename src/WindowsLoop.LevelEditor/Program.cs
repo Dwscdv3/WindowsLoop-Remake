@@ -76,6 +76,20 @@ internal static class Program
                 if (g.EventCount < 1 || g.EventListRows != g.EventCount || g.EvtIndex != 0) fail++;
             }
             else lines.Add("main.json missing, skip event ui check");
+
+            // 事件列表切换：点第 2 条之后，编辑器改的必须是第 2 条
+            // （以前 _evtIndex 不跟着列表走，点哪条都在改第一条 —— 用户报的第二个问题）
+            string multiPath = Path.Combine(LevelStore.LevelsDir, "level777.json");
+            if (File.Exists(multiPath))
+            {
+                using var m = new MainForm(multiPath);
+                bool enough = m.EventCount >= 2;
+                bool switched = enough && m.SelectEventRow(1) && m.EvtIndex == 1;
+                bool back = switched && m.SelectEventRow(0) && m.EvtIndex == 0;
+                lines.Add($"eventSwitch count={m.EventCount} toSecond={switched} backToFirst={back}");
+                if (!enough || !switched || !back) fail++;
+            }
+            else lines.Add("level777.json missing, skip event switch check");
         }
         catch (Exception ex)
         {

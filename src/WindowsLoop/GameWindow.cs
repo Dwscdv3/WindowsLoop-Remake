@@ -292,16 +292,20 @@ internal sealed class GameWindow : Form
     /// <summary>背景层统一压暗到这个亮度倍数，和前景拉开差距，避免玩家把装饰背景当成可站立地形。</summary>
     public const float BackdropBrightness = 0.5f;
 
-    /// <summary>背景层专用的颜色矩阵：只缩放 RGB，alpha 不变。</summary>
-    static readonly ImageAttributes BackdropAttrs = CreateBackdropAttrs();
+    /// <summary>压力板被踩下去时的亮度倍数：稍微压暗一点，配合 2px 下沉，看得出"被压住了"。</summary>
+    public const float PlatePressedBrightness = 0.8f;
 
-    static ImageAttributes CreateBackdropAttrs()
+    /// <summary>背景层专用的颜色矩阵：只缩放 RGB，alpha 不变。</summary>
+    static readonly ImageAttributes BackdropAttrs = CreateBrightnessAttrs(BackdropBrightness);
+    static readonly ImageAttributes PlateAttrs = CreateBrightnessAttrs(PlatePressedBrightness);
+
+    static ImageAttributes CreateBrightnessAttrs(float k)
     {
         var m = new ColorMatrix
         {
-            Matrix00 = BackdropBrightness,
-            Matrix11 = BackdropBrightness,
-            Matrix22 = BackdropBrightness,
+            Matrix00 = k,
+            Matrix11 = k,
+            Matrix22 = k,
             Matrix33 = 1f,
         };
         var attrs = new ImageAttributes();
@@ -350,20 +354,32 @@ internal sealed class GameWindow : Form
                 for (int cx = -1; cx <= ViewTilesX; cx++)
                 {
                     var (piece, mx, my) = _game.CellAt(this, cx, cy);
+
+                    // 被事件藏起来的格子：整块不画（也不挡人，见 Game.SolidInSplice）
+                    if (_game.IsHidden(piece, mx, my)) continue;
+
                     var dst = new Rectangle(cx * LogicalCell - shiftX, cy * LogicalCell - shiftY,
                         LogicalCell, LogicalCell);
 
                     var def = TileSet.Defs[piece.At(mx, my)];
                     int sprite = def.SpriteAt(mx, my, piece.VarAt(mx, my));
                     if (sprite < 0) continue;
+
+                    // 压力板被踩住：往下沉 1px 逻辑像素 + 压暗，看得出"按下去了"
+                    bool plateDown = _game.PlatePressed(piece, mx, my);
+                    if (plateDown) dst.Offset(0, 2);
+
                     // 每格自己决定亮不暗：dim 的格子按背景亮度画，就是以前的"背景层"
-                    var attrs = piece.DimAt(mx, my) ? BackdropAttrs : null;
+                    var attrs = piece.DimAt(mx, my) ? BackdropAttrs
+                        : plateDown ? PlateAttrs
+                        : null;
                     // 每格可以带自己的朝向（关卡 xf 层），素材本身方向不全时靠它补齐
                     DrawSprite(g0, _game.TileSheet, TileSet.SpriteRect(sprite), dst,
                         piece.XfAt(mx, my), attrs);
                 }
             }
 
+            DrawCrates(g0);
             DrawPlayer(g0);
         }
 
@@ -375,6 +391,60 @@ internal sealed class GameWindow : Form
         DrawConnectionGlow(g);
         DrawSeamFlashes(g);
         _game.DrawOverlay(g, this);
+    }
+
+    /// <summary>
+    /// 画箱子。位置取实体的连续坐标（推箱补间 / 下落时它在格与格之间），
+    /// 最后取整到逻辑像素 —— 一帧放大 2.5 倍，落半像素会糊。
+    ///
+    /// 两种"受击"变形：
+    ///   蓄力顶它的时候朝推的方向歪一点（压出来）；
+    ///   刚被推到位 / 刚落地压扁一下（底边不动，横向撑开）。
+    /// </summary>
+    void DrawCrates(Graphics g)
+    {
+        var sheet = _game.CrateSheet;
+        if (sheet == null) return;
+
+        int pw = Math.Max(1, Piece.Width), ph = Math.Max(1, Piece.Height);
+        var src = new RectangleF(0, 0, sheet.Width, sheet.Height);
+
+        // 地图是环形的：箱子的坐标不折回（和玩家一样，可以一路往下掉），
+        // 所以同一只箱子在画面上可能对应好几个位置 —— 镜头滚过地图底部之后，
+        // 它该画在"下一圈"上；地图比取景框还小时，每一份都要画。
+        // 这里按镜头覆盖的范围算出要画哪几份，逐个画。
+        // 不这么算的话，人还站在箱子上下坠、箱子却已经画到画面外了（就是"被拉出地图外消失"）。
+        foreach (var c in _game.Level.Crates)
+        {
+            if (c.Piece != Piece) continue;
+
+            int kx0 = (int)MathF.Floor((CamX - 1.5f - c.X) / pw);
+            int kx1 = (int)MathF.Ceiling((CamX + ViewTilesX + 1.5f - c.X) / pw);
+            int ky0 = (int)MathF.Floor((CamY - 1.5f - c.Y) / ph);
+            int ky1 = (int)MathF.Ceiling((CamY + ViewTilesY + 1.5f - c.Y) / ph);
+
+            // 蓄力顶着的时候朝推的方向歪一点；刚落地 / 刚被推到位压扁一下
+            float lean = _game.PushLean(c) * 1.6f;
+            float sq = c.Impact * 0.16f;
+            float w = MathF.Round(LogicalCell * (1f + sq * 0.6f));
+            float h = MathF.Round(LogicalCell * (1f - sq));
+
+            for (int ky = ky0; ky <= ky1; ky++)
+                for (int kx = kx0; kx <= kx1; kx++)
+                {
+                    float lx = (c.X + kx * pw - CamX) * LogicalCell;
+                    float ly = (c.Y + ky * ph - CamY) * LogicalCell;
+                    if (lx < -LogicalCell || ly < -LogicalCell ||
+                        lx > _frame.Width || ly > _frame.Height) continue;
+
+                    var dest = new RectangleF(
+                        MathF.Round(lx + (LogicalCell - w) / 2f + lean),
+                        MathF.Round(ly + (LogicalCell - h)),
+                        w, h);
+
+                    g.DrawImage(sheet, dest, src, GraphicsUnit.Pixel);
+                }
+        }
     }
 
     void DrawPlayer(Graphics g)

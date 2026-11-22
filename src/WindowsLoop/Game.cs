@@ -3,10 +3,11 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Numerics;
+using WindowsLoop.Tileset;
 
 namespace WindowsLoop;
 
-internal sealed class Game
+internal sealed partial class Game
 {
     public const float FixedDt = 1f / 60f;
 
@@ -14,6 +15,9 @@ internal sealed class Game
     public readonly Player Player = new();
     public Level Level = null!;
     public Bitmap TileSheet = null!, PlayerSheet = null!;
+
+    /// <summary>箱子贴图（16x16，一格）。素材缺失时为 null，箱子会退化成画一个色块。</summary>
+    public Bitmap? CrateSheet;
 
     public bool Running = true;
     public float Time;
@@ -45,31 +49,42 @@ internal sealed class Game
     GameWindow? _camWindow;
 
 
-    public static string AssetPath(string rel) => Path.Combine(AppContext.BaseDirectory, "assets", rel);
-
     /// <summary>关卡文件名（可以带 .json，也可以只是一个名字）。</summary>
     public string LevelName = "main";
 
     public void Init()
     {
+        // 瓦片默认值要先装：读关卡时会按主贴图查这张表，缺了会让所有碰撞退回 false。
+        Assets.LoadEmbeddedTileDefaults();
         if (!TryLoadLevel(LevelName)) TryLoadLevel("main");
-        TileSheet = new Bitmap(AssetPath("tiles.png"));
-        PlayerSheet = new Bitmap(AssetPath("player.png"));
+        TileSheet = Assets.LoadBitmap("tiles.png");
+        PlayerSheet = Assets.LoadBitmap("player.png");
+        try { CrateSheet = Assets.LoadBitmap("crate.png"); }
+        catch { CrateSheet = null; }   // 素材没打进包也别把整局拖死，箱子退化成色块
         OpenWindow();
     }
 
     /// <summary>
     /// 读一关进来（只替换 Level，不动窗口）。关卡文件不存在或读坏了返回 false 并保持原关卡，
     /// 免得一个填错的跳转目标把整个游戏带崩。
+    /// 关卡直接编在程序集里（asset/levels/*.json）；额外允许传一个磁盘绝对路径用来临时试关卡。
     /// </summary>
     public bool TryLoadLevel(string name)
     {
         if (string.IsNullOrWhiteSpace(name)) return false;
         var file = name.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? name : name + ".json";
-        var path = Path.IsPathRooted(file) ? file : AssetPath(Path.Combine("levels", file));
+
+        string? json = Assets.ReadText("levels/" + file);
+        if (json == null && Path.IsPathRooted(file) && File.Exists(file)) json = File.ReadAllText(file);
+        if (json == null)
+        {
+            Log($"load level '{name}' failed: not embedded (asset/levels/{file})");
+            return false;
+        }
+
         try
         {
-            var level = Level.Load(path);
+            var level = Level.Parse(json);
             if (level.Pieces.Count == 0)
             {
                 Log($"load level '{name}' failed: no pieces");
@@ -77,6 +92,7 @@ internal sealed class Game
             }
             Level = level;
             LevelName = name;
+            BuildEventRuntime();   // 隐藏格 / 压力板引用的预表，跟着关卡一起换
             return true;
         }
         catch (Exception ex)
@@ -919,10 +935,12 @@ internal sealed class Game
             var tu = u - ViewOffset(w, target);
             if (!InView(tu)) continue;
 
-            // 对方那张地图在这一格是墙就过不去，否则角色会被塞进墙里卡死
+            // 对方那张地图在这一格是墙（或者站着箱子）就过不去，否则角色会被塞进墙里卡死
             float mx = target.CamX + tu.X;
             float my = target.CamY + tu.Y;
-            if (target.Piece.SolidAt((int)MathF.Floor(mx), (int)MathF.Floor(my))) continue;
+            int cx = (int)MathF.Floor(mx), cy = (int)MathF.Floor(my);
+            if (target.Piece.SolidAt(cx, cy) && !IsHidden(target.Piece, cx, cy)) continue;
+            if (CrateAtCell(target.Piece, cx, cy) != null) continue;
 
             Player.Piece = target.Piece;
             Player.Pos = new Vector2(mx, my);
@@ -1173,6 +1191,7 @@ internal sealed class Game
 
         UpdateInput(dt);
         MoveAndCollide(dt);
+        UpdateCrates(dt);   // 推箱蓄力 / 箱子补间 / 下落，都在角色位置定下来之后
         var here = WindowFor(Player.Piece);
         if (here == null) Respawn();
         else
@@ -1418,10 +1437,19 @@ internal sealed class Game
         if (spaceNow && !_spaceDown) Player.Buffer = Player.JumpBuffer;
         _spaceDown = spaceNow;
 
+
         Player.ClimbAxis = climb;
         Player.Buffer = MathF.Max(0, Player.Buffer - dt);
         Player.Vel.X = axis * Player.Speed;
+        _moveAxis = axis;   // 推箱子看的是"手按着哪个方向"，不是速度（顶住箱子时速度会被清 0）
+
+        // 推箱补间期间水平位移交给箱子（StepSlide 里同速带着人走）。
+        // 这里必须把速度清掉：玩家 10 格/秒比箱子的推速快得多，
+        // 留着输入他会一头扎进箱子已经"占住"的目标格，看起来就是人被落下、箱子自己飞走。
+        if (CarryingCrate) Player.Vel.X = 0f;
+
         if (axis != 0) Player.FacingRight = axis > 0;
+        // 被箱子带着走的时候人确实在位移，脚步循环就照常在响（别一会儿停一会儿响，听着更碎）
         Audio.SetWalking(active && axis != 0 && Player.OnGround);
 
         if (Player.OnGround) Player.Coyote = Player.CoyoteTime;
@@ -1518,17 +1546,48 @@ internal sealed class Game
     }
 
     /// <summary>
-    /// 拼接后的整体里，这一格挡不挡四面。整组窗口之外一律算挡 —— 那就是整片拼接形状的外边界。
+    /// 拼接后的整体里，这一**格地形**挡不挡人。
+    ///
+    /// 箱子不在这里判：它的碰撞按**实际矩形**另算（见 <see cref="CrateHitsAabb"/>），
+    /// 因为下落中的箱子视觉位置会在格子里上下滑，跟它所属的格子能差半格。
+    ///
+    /// 取景框外的处理分两种，这条很关键：
+    ///   · 跟别的窗口拼在一起 → 那就是拼接后的外边界，算墙；
+    ///   · 单独一块自由滚动的窗口 → 根本没有"外面"，那只是镜头没跟上（快速下落时相机会滞后，
+    ///     角色脚下那一格经常暂时落到框外）。地图是首尾相接的，按自己这张地图绕回去接着算。
+    ///     以前这里一律当墙，结果快速下落时会凭空冒出看不见的地板/墙，箱子也因此判不到。
     /// </summary>
-    bool SolidInSplice(GameWindow owner, int mx, int my) =>
+    bool CellBlocks(GameWindow owner, int mx, int my)
+    {
         // 拿格中心去问：中心落在哪块窗口里，就查那块窗口地图上的那一格
-        !TryResolvePoint(owner, mx + 0.5f, my + 0.5f, out var piece, out int px, out int py)
-        || piece.SolidAt(px, py);
+        if (!TryResolvePoint(owner, mx + 0.5f, my + 0.5f, out var piece, out int px, out int py))
+        {
+            if (owner.HasNeighbors) return true;
+            piece = owner.Piece;
+            px = mx;
+            py = my;
+        }
 
-    /// <summary>拼接后的整体里，这一格是不是单向平台。</summary>
-    bool PlatformInSplice(GameWindow owner, int mx, int my) =>
-        TryResolvePoint(owner, mx + 0.5f, my + 0.5f, out var piece, out int px, out int py)
-        && piece.PlatformAt(px, py);
+        if (IsHidden(piece, px, py)) return false;   // "隐藏图块并且不再阻挡"
+        return piece.SolidAt(px, py);
+    }
+
+    /// <summary>
+    /// 拼接后的整体里，这一格是不是单向平台。藏起来的格子不算（和实心同一条口径）；
+    /// 取景框外的处理同 <see cref="CellBlocks"/>（单块自由滚动窗口按环形绕回，拼接的才当边界）。
+    /// </summary>
+    bool PlatformInSplice(GameWindow owner, int mx, int my)
+    {
+        if (!TryResolvePoint(owner, mx + 0.5f, my + 0.5f, out var piece, out int px, out int py))
+        {
+            if (owner.HasNeighbors) return false;
+            piece = owner.Piece;
+            px = mx;
+            py = my;
+        }
+
+        return !IsHidden(piece, px, py) && piece.PlatformAt(px, py);
+    }
 
     /// <summary>
     /// 角色所在（或脚下 <paramref name="dy"/> 格处）那一格的瓦片定义。
@@ -1544,7 +1603,14 @@ internal sealed class Game
         return TileSet.Defs[piece.At(mx, my)];
     }
 
-    bool Collides(Vector2 pos)
+    /// <summary>
+    /// 只有**地形**挡不挡这个位置：实心格子 + 被事件藏起来的格子不算。
+    /// 箱子不在这里判 —— 它按实际矩形另算（<see cref="CrateHitsAabb"/>）。
+    ///
+    /// 拆成两个函数是为了贴齐箱子时用得上："人贴到箱面上"这件事本身会让 AABB 和箱子边界相接，
+    /// 拿合并口径（<see cref="Collides"/>）去验证就会一直报"撞着"，于是永远贴不上去。
+    /// </summary>
+    bool TerrainCollides(Vector2 pos)
     {
         var w = WindowFor(Player.Piece);
         if (w == null) return true;   // 这张地图没有窗口显示：整块都不算存在
@@ -1557,10 +1623,13 @@ internal sealed class Game
 
         for (int y = y0; y <= y1; y++)
             for (int x = x0; x <= x1; x++)
-                if (SolidInSplice(w, x, y)) return true;
+                if (CellBlocks(w, x, y)) return true;
 
         return false;
     }
+
+    /// <summary>这个位置能不能站人：地形 + 箱子。</summary>
+    bool Collides(Vector2 pos) => TerrainCollides(pos) || CrateHitsAabb(pos);
 
     /// <summary>脚底落在平台顶面时的容差（格）。浮点误差别让它卡在"差一点"上。</summary>
     const float PlatformEps = 0.0001f;
@@ -1620,10 +1689,12 @@ internal sealed class Game
             var tu = u - ViewOffset(owner, w);
             if (!InView(tu)) continue;
 
-            // 跨到隔壁时落到对方那张地图上：那一格是墙就走不过去，
+            // 跨到隔壁时落到对方那张地图上：那一格是墙（或者站着箱子）就走不过去，
             // 否则角色会被塞进墙里，之后所有方向都被挡住，看着就像卡死了。
             float mx = w.CamX + tu.X, my = w.CamY + tu.Y;
-            return !w.Piece.SolidAt((int)MathF.Floor(mx), (int)MathF.Floor(my));
+            int cx = (int)MathF.Floor(mx), cy = (int)MathF.Floor(my);
+            bool wall = w.Piece.SolidAt(cx, cy) && !IsHidden(w.Piece, cx, cy);
+            return !wall && CrateAtCell(w.Piece, cx, cy) == null;
         }
 
         return false;
@@ -1650,65 +1721,91 @@ internal sealed class Game
             Player.Vel.Y = Player.ClimbAxis * Player.ClimbSpeed;
             Player.OnGround = false;
         }
+        else if (_rideCrate is { } ride && CanRide(ride))
+        {
+            // 踩在箱子上：箱子就是"活动地面" —— 不施加重力，竖直位置由 UpdateCrates 贴到箱顶。
+            // 起跳时 UpdateInput 已经把 Vel.Y 设成负的，CanRide 会返回 false，照常走跳跃。
+            GlueToRide(ride);
+        }
         else
         {
+            _rideCrate = null;
             float g = Player.Vel.Y > 0 ? Player.Gravity(dt) * Player.FallGravityScale : Player.Gravity(dt);
             Player.Vel.Y += g * dt;
             if (Player.Vel.Y > Player.MaxFallSpeed) Player.Vel.Y = Player.MaxFallSpeed;
         }
 
-        // horizontal
+        // horizontal：走不动时如果是箱子挡的，先贴齐箱面再掐掉速度 ——
+        // 推箱判定靠的是"身体边缘离箱面多远"，贴齐之后就不会出现"差 0.1 格所以够不着"。
         float remain = Player.Vel.X * dt;
         while (MathF.Abs(remain) > 1e-5f)
         {
             float step = Math.Clamp(remain, -0.2f, 0.2f);
             var next = Player.Pos + new Vector2(step, 0);
             if (!Collides(next)) { Player.Pos = next; remain -= step; }
-            else { Player.Vel.X = 0; break; }
-        }
-
-        // vertical
-        Player.OnGround = false;
-        remain = Player.Vel.Y * dt;
-        while (MathF.Abs(remain) > 1e-5f)
-        {
-            float step = Math.Clamp(remain, -0.2f, 0.2f);
-            var next = Player.Pos + new Vector2(0, step);
-
-            // 往上走无视单向平台（直接顶穿），往下走才可能被平台顶面接住
-            float feet = Player.Pos.Y + Player.Height / 2f;
-            bool blocked = step > 0 ? CollidesFalling(next, feet) : Collides(next);
-
-            if (!blocked) { Player.Pos = next; remain -= step; }
             else
             {
-                if (step > 0)
-                {
-                    Player.OnGround = true;
-
-                    // 贴地：把脚底精确对到落到的方块上表面。
-                    // 不贴的话会停在离地最多 0.2 格的位置，下一帧判定"离地"、
-                    // 再下一帧又"落地"，落地音就会连着响好几遍（移动时尤其明显）。
-                    // 实心是"撞进去再抬回来"，单向平台是"还没碰到就被接住"，
-                    // 所以上下两个方向都要贴，否则平台上方会留一层看不出来的悬浮。
-                    float landedRow = MathF.Floor(next.Y + Player.Height / 2f);
-                    float snappedY = landedRow - Player.Height / 2f;
-                    if (snappedY != Player.Pos.Y &&
-                        MathF.Abs(snappedY - Player.Pos.Y) <= 0.25f &&
-                        !Collides(new Vector2(Player.Pos.X, snappedY)))
-                        Player.Pos = new Vector2(Player.Pos.X, snappedY);
-
-                    // 踩在弹簧上：直接给一个能弹起 SpringHeight 的初速度
-                    if (CellDefAtPlayer(Player.Height / 2f + 0.1f)?.Spring == true)
-                    {
-                        Player.Vel.Y = -Player.VelocityFor(Player.SpringHeight, dt);
-                        Player.OnGround = false;
-                        break;
-                    }
-                }
-
-                Player.Vel.Y = 0;
+                SnapFlushToCrate(next, step > 0 ? 1 : -1);
+                Player.Vel.X = 0;
                 break;
+            }
+        }
+
+        // vertical：踩着箱子时整段跳过（位置由 UpdateCrates 贴到箱顶）
+        if (_rideCrate == null)
+        {
+            Player.OnGround = false;
+            remain = Player.Vel.Y * dt;
+            while (MathF.Abs(remain) > 1e-5f)
+            {
+                float step = Math.Clamp(remain, -0.2f, 0.2f);
+                var next = Player.Pos + new Vector2(0, step);
+
+                // 往上走无视单向平台（直接顶穿），往下走才可能被平台顶面接住
+                float feet = Player.Pos.Y + Player.Height / 2f;
+                bool blocked = step > 0 ? CollidesFalling(next, feet) : Collides(next);
+
+                if (!blocked) { Player.Pos = next; remain -= step; }
+                else
+                {
+                    if (step > 0)
+                    {
+                        Player.OnGround = true;
+
+                        // 踩在箱子上：箱子的顶面是连续坐标（下落时在格子里滑），直接贴到它顶面，
+                        // 并把这箱子记成"正踩着的那只"，之后每帧由 UpdateCrates 贴住。
+                        if (TryCrateTopUnder(next, feet, out var standingCrate, out float crateTop))
+                        {
+                            Player.Pos = new Vector2(Player.Pos.X, crateTop - Player.Height / 2f);
+                            Player.Vel.Y = 0;
+                            _rideCrate = standingCrate;
+                            break;
+                        }
+
+                        // 贴地：把脚底精确对到落到的方块上表面。
+                        // 不贴的话会停在离地最多 0.2 格的位置，下一帧判定"离地"、
+                        // 再下一帧又"落地"，落地音就会连着响好几遍（移动时尤其明显）。
+                        // 实心是"撞进去再抬回来"，单向平台是"还没碰到就被接住"，
+                        // 所以上下两个方向都要贴，否则平台上方会留一层看不出来的悬浮。
+                        float landedRow = MathF.Floor(next.Y + Player.Height / 2f);
+                        float snappedY = landedRow - Player.Height / 2f;
+                        if (snappedY != Player.Pos.Y &&
+                            MathF.Abs(snappedY - Player.Pos.Y) <= 0.25f &&
+                            !Collides(new Vector2(Player.Pos.X, snappedY)))
+                            Player.Pos = new Vector2(Player.Pos.X, snappedY);
+
+                        // 踩在弹簧上：直接给一个能弹起 SpringHeight 的初速度
+                        if (CellDefAtPlayer(Player.Height / 2f + 0.1f)?.Spring == true)
+                        {
+                            Player.Vel.Y = -Player.VelocityFor(Player.SpringHeight, dt);
+                            Player.OnGround = false;
+                            break;
+                        }
+                    }
+
+                    Player.Vel.Y = 0;
+                    break;
+                }
             }
         }
 
@@ -1860,25 +1957,184 @@ internal sealed class Game
 
     // ── 网格事件 ──────────────────────────────────────────────────────────
 
-    /// <summary>本关已经触发过的事件下标。每次读关卡 / 按 R 重置。</summary>
+    /// <summary>本关已经触发过的**触碰**事件下标。每次读关卡 / 按 R 重置。</summary>
     readonly HashSet<int> _firedEvents = new();
 
     /// <summary>
-    /// 每帧检查角色所在那一格挂着的事件串。
+    /// 当前处于"激活状态"的事件：触碰事件触发后就一直激活，压力板事件跟着板子的按压状态来。
+    /// 「隐藏绑定格」这条操作看的就是这里 —— 一格上挂着多条事件时，只要有一条激活，格子就藏。
+    /// </summary>
+    readonly HashSet<int> _activeEvents = new();
+
+    /// <summary>上一帧还按着的压力板事件。用来抓"刚踩下去"那一帧跑一次 goto / run。</summary>
+    readonly HashSet<int> _plateDown = new();
+
+    /// <summary>
+    /// 挂着"隐藏本格"操作的格子（关卡读进来时预扫一遍）。
+    /// 每帧按激活状态重算 <see cref="_hidden"/>，别在绘制 / 碰撞时临时判。
+    /// </summary>
+    readonly List<(Piece Piece, int X, int Y, List<int> Seq)> _hideCells = new();
+
+    /// <summary>压力板事件 → 它盯的那块板（地图块 + 格）。板子不存在的事件不会进来。</summary>
+    readonly List<(int Event, Piece Piece)> _plateRefs = new();
+
+    /// <summary>
+    /// 已经被藏起来的格子。按地图块分组，key = y * Width + x。
+    /// 只有 <see cref="_hideCells"/> 里的格子会进来，通常是个位数。
+    /// </summary>
+    readonly Dictionary<Piece, HashSet<int>> _hidden = new();
+
+    /// <summary>关卡读完 / 换关时重建预表：哪些格子会因为事件被藏、哪些事件盯哪块板。</summary>
+    void BuildEventRuntime()
+    {
+        _hideCells.Clear();
+        _plateRefs.Clear();
+        _hidden.Clear();
+        if (Level == null) return;
+
+        foreach (var p in Level.Pieces)
+        {
+            if (p.Evt == null) continue;
+            for (int y = 0; y < p.Height; y++)
+                for (int x = 0; x < p.Width; x++)
+                {
+                    int si = p.EvtSeqAt(x, y);
+                    if (si < 0 || si >= Level.EvtSeqs.Count) continue;
+
+                    var seq = Level.EvtSeqs[si];
+                    bool hides = false;
+                    foreach (int idx in seq)
+                        if (Has(index: idx) && Level.Events[idx].Hides) { hides = true; break; }
+
+                    if (hides) _hideCells.Add((p, x, y, seq));
+                }
+        }
+
+        for (int i = 0; i < Level.Events.Count; i++)
+        {
+            var ev = Level.Events[i];
+            if (ev.Trigger != EventTrigger.Plate) continue;
+            if (ev.PlateX < 0 || ev.PlateY < 0) continue;   // 没填坐标 = 这块板不存在
+
+            Piece? piece = string.IsNullOrEmpty(ev.PlatePiece) ? BoundPieceOf(i) : PieceById(ev.PlatePiece);
+            if (piece != null) _plateRefs.Add((i, piece));
+        }
+
+        bool Has(int index) => index >= 0 && index < Level.Events.Count;
+    }
+
+    Piece? PieceById(string id)
+    {
+        foreach (var p in Level.Pieces)
+            if (p.Id == id) return p;
+        return null;
+    }
+
+    /// <summary>这条事件挂在哪些格子上，就取第一块地图（压力板没填地图块时用它兜底）。</summary>
+    Piece? BoundPieceOf(int eventIndex)
+    {
+        foreach (var p in Level.Pieces)
+        {
+            if (p.Evt == null) continue;
+            for (int y = 0; y < p.Height; y++)
+                for (int x = 0; x < p.Width; x++)
+                {
+                    int si = p.EvtSeqAt(x, y);
+                    if (si >= 0 && si < Level.EvtSeqs.Count && Level.EvtSeqs[si].Contains(eventIndex))
+                        return p;
+                }
+        }
+        return null;
+    }
+
+    /// <summary>重开 / 换关时把事件的运行状态清空（预表本身不动）。</summary>
+    void ResetEventRuntime()
+    {
+        _activeEvents.Clear();
+        _plateDown.Clear();
+        foreach (var set in _hidden.Values) set.Clear();
+    }
+
+    /// <summary>这一格是不是被事件藏起来了：藏起来就不画、也不挡人。</summary>
+    public bool IsHidden(Piece piece, int x, int y)
+    {
+        if (_hidden.Count == 0) return false;
+        if (!_hidden.TryGetValue(piece, out var set) || set.Count == 0) return false;
+
+        int w = piece.Width, h = piece.Height;
+        if (w <= 0 || h <= 0) return false;
+        int wx = ((x % w) + w) % w;
+        int wy = ((y % h) + h) % h;
+        return set.Contains(wy * w + wx);
+    }
+
+    /// <summary>
+    /// 这一格的压力板是不是被压着。玩家和箱子都算，而且**身体所在格和脚底那一格**都认：
+    /// 板子画在地板那一格（脚下）就按脚底算，画在站立的空格里就按身体算，
+    /// 两种摆法都能用，做关卡时不用去猜引擎认哪一格。
+    /// </summary>
+    public bool PlatePressed(Piece piece, int x, int y)
+    {
+        int w = piece.Width, h = piece.Height;
+        if (w <= 0 || h <= 0) return false;
+        int wx = ((x % w) + w) % w;
+        int wy = ((y % h) + h) % h;
+        if (!piece.PlateAt(wx, wy)) return false;
+
+        if (Player.Piece == piece)
+        {
+            // 身体所在格（中心）和脚底那一格都算；左右边缘各探一次，
+            // 因为角色 0.62 格宽，站在两格之间时会同时压着两列。
+            int by = (int)MathF.Floor(Player.Pos.Y);
+            int fy = (int)MathF.Floor(Player.Pos.Y + Player.Height / 2f + 0.02f);
+            if (by == wy || fy == wy)
+            {
+                int lx = (int)MathF.Floor(Player.Pos.X - Player.Width / 2f + 0.02f);
+                int rx = (int)MathF.Floor(Player.Pos.X + Player.Width / 2f - 0.02f);
+                int cx = (int)MathF.Floor(Player.Pos.X);
+                if (wx == cx || wx == lx || wx == rx) return true;
+            }
+        }
+
+        foreach (var c in Level.Crates)
+        {
+            if (c.Piece != piece) continue;
+            int cx = ((c.CellX % w) + w) % w;
+            int cy = ((c.CellY % h) + h) % h;
+            int fy = ((c.FeetY % h) + h) % h;
+            if (cx == wx && (cy == wy || fy == wy)) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 每帧检查事件：先跑触碰，再看压力板的按压状态，最后重算"哪些格子被藏"。
     ///
     /// 触发口径：角色身体中心落在哪一格就算"碰到"那一格（和以前拿宝石一致）。
     /// 一格可以挂多条事件，**按顺序逐条判定**：条件满足就执行，不满足就跳过接着判下一条。
     /// 前置条件不满足的事件不会被标记成已触发 —— 玩家在格子里站着不动、
     /// 把摄像机滚到指定范围，事件照样会亮，这正是解谜要的手感。
-    /// 同一条事件一次进入关卡最多触发一次。
+    /// 同一条触碰事件一次进入关卡最多触发一次。
     ///
     /// 关键：某条事件把地图换掉了（跳关），这一格剩下的序列立刻全部取消 ——
     /// 地图、角色、格子都已经不是刚才那个了，继续拿旧状态往下判定只会出鬼。
     /// </summary>
     void UpdateEvents()
     {
-        if (Level.Events.Count == 0) return;
+        if (Level.Events.Count == 0)
+        {
+            if (_activeEvents.Count > 0 || _hidden.Count > 0) RebuildHidden();
+            return;
+        }
 
+        UpdateTouchEvents();
+        UpdatePlateEvents();
+        RebuildHidden();
+    }
+
+    void UpdateTouchEvents()
+    {
         var piece = Player.Piece;
         if (piece == null) return;
 
@@ -1897,10 +2153,72 @@ internal sealed class Game
             if (!ConditionsMet(ev)) continue;
 
             _firedEvents.Add(idx);
+            _activeEvents.Add(idx);
             Fire(ev);
 
             // 地图切换已经开始：剩下的取消，等新关卡把一切重置干净
             if (Fading) return;
+        }
+    }
+
+    /// <summary>
+    /// 压力板事件：板子按着就算激活（藏起来的图块随之消失），松开就撤掉。
+    /// goto / run 这类一次性动作只在"刚踩下去"那一帧跑，不会每帧重放。
+    /// </summary>
+    void UpdatePlateEvents()
+    {
+        for (int i = 0; i < _plateRefs.Count; i++)
+        {
+            var (index, piece) = _plateRefs[i];
+            if (index < 0 || index >= Level.Events.Count) continue;
+
+            var ev = Level.Events[index];
+            bool down = PlatePressed(piece, ev.PlateX, ev.PlateY) && ConditionsMet(ev);
+
+            bool was = _plateDown.Contains(index);
+            if (down == was) continue;
+
+            if (down)
+            {
+                _plateDown.Add(index);
+                _activeEvents.Add(index);
+                foreach (var act in ev.OneShots)
+                {
+                    if (Fading) return;
+                    Execute(act);
+                }
+            }
+            else
+            {
+                _plateDown.Remove(index);
+                _activeEvents.Remove(index);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 重算隐藏格：一格上可能挂着好几条"隐藏本格"的事件，**只要有一条激活就藏**。
+    /// 触碰事件触发过就一直算激活，压力板事件跟着板子走，所以松开板子墙会重新出现。
+    /// </summary>
+    void RebuildHidden()
+    {
+        foreach (var set in _hidden.Values) set.Clear();
+
+        for (int i = 0; i < _hideCells.Count; i++)
+        {
+            var (piece, x, y, seq) = _hideCells[i];
+
+            bool hide = false;
+            for (int k = 0; k < seq.Count; k++)
+            {
+                int idx = seq[k];
+                if (idx < 0 || idx >= Level.Events.Count) continue;
+                if (_activeEvents.Contains(idx) && Level.Events[idx].Hides) { hide = true; break; }
+            }
+            if (!hide) continue;
+
+            if (!_hidden.TryGetValue(piece, out var set)) _hidden[piece] = set = new HashSet<int>();
+            set.Add(y * piece.Width + x);
         }
     }
 
@@ -1969,6 +2287,11 @@ internal sealed class Game
 
             case "run":
                 Launch(act.Target, act.Args);
+                break;
+
+            case "hide":
+                // 状态型操作：不做"一次性"的事，格子藏不藏由 RebuildHidden 按激活状态决定。
+                // 走到这里说明某条事件被触发了，隐藏会在这一帧末尾自然生效。
                 break;
         }
     }
@@ -2169,6 +2492,18 @@ internal sealed class Game
         DraggingWindow = null;
         _wasOnGround = false;
         _airTime = 0f;
+
+        // 箱子回到关卡里写的位置；事件激活状态、隐藏格、推箱蓄力一起清空。
+        // 重开是"这一局从零再来"，所以箱子被推到哪儿了不能留着。
+        Level.ResetCrates();
+        ResetEventRuntime();
+        _pushCrate = null;
+        _pushCharge = 0f;
+        _pushDir = 0;
+        _carryCrate = null;
+        _carryDir = 0;
+        _rideCrate = null;
+        _moveAxis = 0f;
 
         // 角色状态清干净：出生点会在 OpenWindow → PlaceAtSpawn 里重新设定
         Player.Pos = Vector2.Zero;

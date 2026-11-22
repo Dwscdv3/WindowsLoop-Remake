@@ -119,6 +119,40 @@ internal static class EventSelfTest
             var old = Level.Load(tmp);
             Check(lines, ref fail, "旧关卡没有事件表也能读",
                 old.Events.Count == 0 && old.EvtSeqs.Count == 0 && old.Pieces[0].EvtSeqAt(0, 0) == -1);
+
+            // ---- 压力板触发器 + 隐藏操作 ----
+            File.WriteAllText(tmp, """
+            {
+              "name":"plate-selftest","maxWindows":1,
+              "tiles":{"P":{"sprite":69},"w":{"sprite":9,"solid":true}},
+              "events":[
+                {"name":"开门","trigger":"plate","plate":{"piece":"p","x":3,"y":2},"actions":[{"type":"hide"}]},
+                {"name":"跟绑定格","trigger":"plate","plate":{"x":5,"y":6},"actions":[{"type":"hide"}]},
+                {"name":"没坐标","trigger":"plate","actions":[{"type":"run","target":"x"}]},
+                {"name":"又藏又跳","trigger":"touch","actions":[{"type":"hide"},{"type":"goto","level":"a"}]}
+              ],
+              "evtSeq":[[0],[1],[3]],
+              "pieces":[
+                {"id":"p","rows":["....","...."],"evt":[".0..","..1."],"spawn":[0,0]}
+              ]
+            }
+            """);
+            var plate = Level.Load(tmp);
+            var pev = plate.Events;
+
+            Check(lines, ref fail, "压力板触发器读成 Plate", pev[0].Trigger == EventTrigger.Plate);
+            Check(lines, ref fail, "压力板坐标读到（地图块 + x,y）",
+                pev[0].PlatePiece == "p" && pev[0].PlateX == 3 && pev[0].PlateY == 2);
+            Check(lines, ref fail, "地图块留空 = 跟绑定格所在的那块",
+                pev[1].PlatePiece == "" && pev[1].PlateX == 5 && pev[1].PlateY == 6);
+            Check(lines, ref fail, "没填坐标的板事件仍是 Plate 但坐标非法（永不激活）",
+                pev[2].Trigger == EventTrigger.Plate && pev[2].PlateX < 0);
+            Check(lines, ref fail, "hide 动作被认成隐藏而不是一次性动作",
+                pev[0].Hides && !pev[0].OneShots.Any());
+            Check(lines, ref fail, "一条事件里 hide 和 goto 能共存，只有 goto 算一次性",
+                pev[3].Hides && pev[3].OneShots.Count() == 1 && pev[3].OneShots.First().Type == "goto");
+            Check(lines, ref fail, "69 号瓦片读成压力板",
+                TileSet.Defs[TileSet.IdOf('P')].Plate);
         }
         catch (Exception ex)
         {

@@ -20,6 +20,9 @@ internal sealed class TileDoc
     [JsonPropertyName("spring")] public bool? Spring { get; set; }
     [JsonPropertyName("climb")] public bool? Climb { get; set; }
 
+    /// <summary>压力板：玩家或箱子与这一格重叠就算踩下（事件触发器可以读它）。</summary>
+    [JsonPropertyName("plate")] public bool? Plate { get; set; }
+
     /// <summary>模型还没认识的字段原样保留，避免"打开→保存"把以后的关卡字段吃掉。</summary>
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
 
@@ -51,6 +54,7 @@ internal sealed class TileDoc
     [JsonIgnore] public bool EffectiveWaterFlag => TileDefaults.WaterOf(Water, SpriteList());
     [JsonIgnore] public bool EffectiveSpringFlag => TileDefaults.SpringOf(Spring, SpriteList());
     [JsonIgnore] public bool EffectiveClimbFlag => TileDefaults.ClimbOf(Climb, SpriteList());
+    [JsonIgnore] public bool EffectivePlateFlag => TileDefaults.PlateOf(Plate, SpriteList());
 
     /// <summary>五个属性里有没有哪一项是「跟随瓦片默认」（没在关卡里写死）。</summary>
     [JsonIgnore] public bool FollowsDefaults =>
@@ -65,6 +69,7 @@ internal sealed class TileDoc
         Water = Water,
         Spring = Spring,
         Climb = Climb,
+        Plate = Plate,
         Extra = Extra,
     };
 }
@@ -265,6 +270,7 @@ internal sealed class PieceDoc
     public SolidKind EffectiveKind(LevelDoc doc, int x, int y)
     {
         int s = GetSolid(x, y);
+        if (s == (int)SolidKind.Crate) return SolidKind.Crate;
         if (s == (int)SolidKind.Block) return SolidKind.Block;
         if (s == (int)SolidKind.Platform) return SolidKind.Platform;
         if (s == (int)SolidKind.Pass) return SolidKind.Pass;
@@ -275,8 +281,12 @@ internal sealed class PieceDoc
         return t.EffectivePlatformFlag ? SolidKind.Platform : SolidKind.Pass;
     }
 
-    /// <summary>这一格会不会四面挡人（单向平台不算）。</summary>
-    public bool EffectiveSolid(LevelDoc doc, int x, int y) => EffectiveKind(doc, x, y) == SolidKind.Block;
+    /// <summary>这一格会不会四面挡人（单向平台不算；箱子算，它挡人只是会动）。</summary>
+    public bool EffectiveSolid(LevelDoc doc, int x, int y) =>
+        EffectiveKind(doc, x, y) is SolidKind.Block or SolidKind.Crate;
+
+    /// <summary>这一格是不是箱子（solid 层写了 '3'）。</summary>
+    public bool IsCrate(int x, int y) => GetSolid(x, y) == (int)SolidKind.Crate;
 
     /// <summary>这一格是不是单向平台。</summary>
     public bool EffectivePlatform(LevelDoc doc, int x, int y) => EffectiveKind(doc, x, y) == SolidKind.Platform;
@@ -459,12 +469,13 @@ internal sealed class LevelDoc
 
 /// <summary>
 /// 一条动作（对着任务计划程序里的"操作"）。
-/// goto = 跳转到指定关卡；run = 在电脑上打开程序 / 网址 / 文件。
+/// goto = 跳转到指定关卡；run = 在电脑上打开程序 / 网址 / 文件；
+/// hide = 把事件绑定的那几格图块藏起来、并且不再阻挡。
 /// 一条事件可以挂多条，按顺序执行。
 /// </summary>
 internal sealed class ActionDoc
 {
-    /// <summary>"goto" / "run"；认不出来的值游戏里按"什么都不做"处理。</summary>
+    /// <summary>"goto" / "run" / "hide"；认不出来的值游戏里按"什么都不做"处理。</summary>
     [JsonPropertyName("type")] public string Type { get; set; } = "goto";
 
     /// <summary>goto 的目标关卡（assets/levels 下的文件名，不带 .json）。留空 = 还没填。</summary>
@@ -500,6 +511,7 @@ internal sealed class ActionDoc
     {
         "goto" => "跳转 " + (string.IsNullOrWhiteSpace(Level) ? "(未填)" : Level),
         "run" => "执行 " + (string.IsNullOrWhiteSpace(Target) ? "(未填)" : Shorten(Target)),
+        "hide" => "隐藏本格图块（不再阻挡）",
         _ => "无动作(" + Type + ")",
     };
 
@@ -537,6 +549,24 @@ internal sealed class ConditionDoc
 }
 
 /// <summary>
+/// 压力板触发器盯的是哪一块板：地图块 id + 格坐标。
+/// Piece 留空 = 用"事件绑定格"所在的那块地图（事件挂在好几块地图上时按每块分别算）。
+/// </summary>
+internal sealed class PlateRefDoc
+{
+    [JsonPropertyName("piece")] public string Piece { get; set; } = "";
+    [JsonPropertyName("x")] public int X { get; set; }
+    [JsonPropertyName("y")] public int Y { get; set; }
+
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+
+    public PlateRefDoc Clone() => new() { Piece = Piece, X = X, Y = Y, Extra = Extra };
+
+    public string Describe() =>
+        $"{(string.IsNullOrEmpty(Piece) ? "(绑定格所在图块)" : Piece)} ({X},{Y})";
+}
+
+/// <summary>
 /// 一条网格事件，结构对着 Windows 任务计划程序：
 /// 触发器（什么时候判）+ 动作（按顺序做什么，可以多条）+ 条件（能不能做）。
 /// </summary>
@@ -544,8 +574,11 @@ internal sealed class EventDoc
 {
     [JsonPropertyName("name")] public string Name { get; set; } = "";
 
-    /// <summary>触发器。目前只有 "touch"（角色所在格被触碰）。</summary>
+    /// <summary>触发器："touch"（角色走进这一格）/ "plate"（指定的压力板被压住）。</summary>
     [JsonPropertyName("trigger")] public string Trigger { get; set; } = "touch";
+
+    /// <summary>trigger == "plate" 时盯的那块板。</summary>
+    [JsonPropertyName("plate")] public PlateRefDoc? Plate { get; set; }
 
     /// <summary>动作串，按顺序执行。空表 = 什么都不做（草稿）。</summary>
     [JsonPropertyName("actions")] public List<ActionDoc>? Actions { get; set; }
@@ -562,6 +595,7 @@ internal sealed class EventDoc
     {
         Name = Name,
         Trigger = Trigger,
+        Plate = Plate?.Clone(),
         Actions = Actions?.Select(a => a.Clone()).ToList(),
         Conditions = Conditions?.Select(c => c.Clone()).ToList(),
         Extra = Extra,
@@ -579,7 +613,8 @@ internal sealed class EventDoc
             : acts.Count == 1 ? acts[0].Describe() : $"{acts[0].Describe()} 等 {acts.Count} 条动作";
         int n = Conditions?.Count ?? 0;
         string cond = n == 0 ? "" : $"  [{n} 条件]";
-        return $"{act}{cond}";
+        string trig = Trigger == "plate" ? $"板{Plate?.Describe() ?? "(未选)"} → " : "";
+        return $"{trig}{act}{cond}";
     }
 }
 
@@ -824,7 +859,42 @@ internal static class LevelStore
             var ev = doc.Events[i];
             if (ev.HasUnsetAction) list.Add($"事件 #{i} 有动作还没填目标");
             if (!used.Contains(i)) list.Add($"事件 #{i} 没挂到任何格子");
+
+            // 压力板触发器：坐标越界 / 指错了板子的，游戏里永远不激活
+            if (ev.Trigger == "plate")
+            {
+                if (ev.Plate == null) list.Add($"事件 #{i} 是压力板触发，但还没填是哪块板");
+                // 地图块留空 = 跟随"事件绑定格"所在的那块，这里没法预先验，交给游戏按链接算
+                else if (!string.IsNullOrEmpty(ev.Plate.Piece))
+                {
+                    var target = doc.Pieces.FirstOrDefault(p => p.Id == ev.Plate.Piece);
+                    if (target == null) list.Add($"事件 #{i} 的压力板指向不存在的地图块「{ev.Plate.Piece}」");
+                    else if (ev.Plate.X < 0 || ev.Plate.Y < 0 ||
+                             ev.Plate.X >= target.Width || ev.Plate.Y >= target.Height)
+                        list.Add($"事件 #{i} 的压力板坐标 ({ev.Plate.X},{ev.Plate.Y}) 超出地图块「{target.Id}」");
+                }
+            }
         }
+
+        // 箱子按口径要放在空瓦片格里：同一格又画了图块的，游戏里会两个叠着画
+        int crateNotes = 0, crateTotal = 0;
+        foreach (var p in doc.Pieces)
+        {
+            if (p.Solid == null) continue;
+            for (int y = 0; y < p.Solid.Count; y++)
+                for (int x = 0; x < p.Solid[y].Length; x++)
+                {
+                    if (PieceDoc.DigitOf(p.Solid[y][x]) != (int)SolidKind.Crate) continue;
+                    if (PieceDoc.IsAir(p.GetCell(x, y))) continue;
+                    crateTotal++;
+                    if (crateNotes < 3)
+                    {
+                        list.Add($"{p.Id} 的 ({x},{y}) 是箱子，但那一格还画了图块");
+                        crateNotes++;
+                    }
+                }
+        }
+        if (crateTotal > crateNotes) list.Add($"…还有 {crateTotal - crateNotes} 处箱子盖在图块上");
 
         if (doc.EvtSeq.Count > 62)
             list.Add($"事件组有 {doc.EvtSeq.Count} 组，超过一层格子能表示的 62 组");
@@ -920,6 +990,7 @@ internal static class SelfTest
         AddTileDefaultsCase(lines);
         AddGridOpsCase(lines);
         AddEventCase(lines);
+        AddCratePlateCase(lines);
         string outPath = Path.Combine(Path.GetTempPath(), "windowsloop-editor-selftest.txt");
         File.WriteAllLines(outPath, lines);
     }
@@ -1158,6 +1229,54 @@ internal static class SelfTest
                   $"clipboard={GridClipboard.Description} expect all=true");
     }
 
+    /// <summary>
+    /// 箱子与压力板：solid 层 '3' 落盘往返不丢、判定成 Crate、
+    /// 压力板触发器与 hide 动作写进 JSON 再读回来还是原样。
+    /// </summary>
+    static void AddCratePlateCase(List<string> lines)
+    {
+        var doc = LevelDoc.NewLevel();
+        var p = doc.Pieces[0];
+        doc.Tiles["P"] = new TileDoc { Sprite = 69 };
+
+        p.SetCell(2, 1, '.');
+        p.SetSolid(2, 1, (int)SolidKind.Crate);
+        p.SetCell(3, 1, 'P');
+
+        bool kindCrate = p.EffectiveKind(doc, 2, 1) == SolidKind.Crate;
+        bool crateSolid = p.EffectiveSolid(doc, 2, 1);
+        bool plateCell = doc.Tiles["P"].EffectivePlateFlag;
+
+        doc.Events.Add(new EventDoc
+        {
+            Name = "板开门",
+            Trigger = "plate",
+            Plate = new PlateRefDoc { Piece = p.Id, X = 3, Y = 1 },
+            Actions = new List<ActionDoc> { new() { Type = "hide" } },
+        });
+        doc.SetCellEvents(p, 5, 2, new[] { 0 });
+
+        string json = LevelStore.Serialize(doc);
+        bool keys = json.Contains("\"plate\"") && json.Contains("\"hide\"");
+        var back = LevelStore.Deserialize(json);
+        var bp = back.Pieces[0];
+        bool crateKept = bp.GetSolid(2, 1) == (int)SolidKind.Crate;
+        bool evtKept = back.Events.Count == 1 && back.Events[0].Trigger == "plate" &&
+                       back.Events[0].Plate is { } r && r.Piece == p.Id && r.X == 3 && r.Y == 1 &&
+                       back.Events[0].Actions is { Count: 1 } acts && acts[0].Type == "hide";
+        bool boundKept = SameSeq(back.SeqOf(bp, 5, 2), new List<int> { 0 });
+
+        // 清掉箱子后 solid 层不该留空壳
+        bp.SetSolid(2, 1, -1);
+        bp.Normalize();
+        bool clean = bp.Solid == null;
+
+        lines.Add($"crate/plate: kindCrate={kindCrate} solid={crateSolid} plateFlag={plateCell} " +
+                  $"keys={(keys ? "yes" : "no")} crate={(crateKept ? "kept" : "lost")} " +
+                  $"event={(evtKept ? "kept" : "lost")} bound={boundKept} emptyAfterClear={(clean ? "yes" : "no")} " +
+                  $"expect all=true");
+    }
+
     static bool SameLayer(List<string>? a, List<string>? b) =>
         a == null || b == null ? a == b : a.SequenceEqual(b);
 
@@ -1186,7 +1305,16 @@ internal static class SelfTest
             if (aa[i].Target != ab[i].Target) return false;
             if (aa[i].Args != ab[i].Args) return false;
         }
-        return a.Name == b.Name && a.Trigger == b.Trigger;
+        // 压力板触发器：写进 JSON 再读回来不能丢
+        if (a.Trigger != b.Trigger) return false;
+        if (a.Plate == null || b.Plate == null)
+        {
+            if (a.Plate != b.Plate) return false;
+        }
+        else if (a.Plate.Piece != b.Plate.Piece || a.Plate.X != b.Plate.X || a.Plate.Y != b.Plate.Y)
+            return false;
+
+        return a.Name == b.Name;
     }
 
     static bool SameSeq(List<int>? a, List<int>? b) =>
@@ -1307,5 +1435,6 @@ internal static class SelfTest
         a.Sprite == b.Sprite &&
         a.Solid == b.Solid && a.Platform == b.Platform &&
         a.Water == b.Water && a.Spring == b.Spring && a.Climb == b.Climb &&
+        a.Plate == b.Plate &&
         (a.Sprites == null ? b.Sprites == null : b.Sprites != null && a.Sprites.SequenceEqual(b.Sprites));
 }

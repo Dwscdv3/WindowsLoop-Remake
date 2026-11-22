@@ -26,7 +26,7 @@ internal sealed class MainForm : Form
 
     readonly TextBox _search = new(), _name = new(), _note = new();
     readonly ComboBox _group = new();
-    readonly CheckBox _solid = new(), _water = new(), _climb = new(), _spring = new(), _platform = new();
+    readonly CheckBox _solid = new(), _water = new(), _climb = new(), _spring = new(), _platform = new(), _plate = new();
     readonly Label _selLabel = new(), _pathLabel = new();
     readonly PictureBox _preview = new();
 
@@ -185,8 +185,9 @@ internal sealed class MainForm : Form
         WireFlag(_water, right, "water 水", y + 60, t => t.Water, (t, v) => t.Water = v);
         WireFlag(_climb, right, "climb 可攀爬", y + 90, t => t.Climb, (t, v) => t.Climb = v);
         WireFlag(_spring, right, "spring 弹簧", y + 120, t => t.Spring, (t, v) => t.Spring = v);
+        WireFlag(_plate, right, "plate 压力板（玩家 / 箱子压住即激活）", y + 150, t => t.Plate, (t, v) => t.Plate = v);
 
-        y += 162;
+        y += 192;
         right.Controls.Add(MakeBtn("全部设为实心", 12, y, 150, 30, (_, _) => BatchSolid(SolidKind.Block)));
         right.Controls.Add(MakeBtn("全部设为可穿过", 170, y, 158, 30, (_, _) => BatchSolid(SolidKind.Pass)));
 
@@ -390,6 +391,7 @@ internal sealed class MainForm : Form
         SetFlag(_water, entries, t => t.Water, sel.Count);
         SetFlag(_climb, entries, t => t.Climb, sel.Count);
         SetFlag(_spring, entries, t => t.Spring, sel.Count);
+        SetFlag(_plate, entries, t => t.Plate, sel.Count);
 
         var old = _preview.Image;
         _preview.Image = null;

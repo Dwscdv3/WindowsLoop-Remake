@@ -5,17 +5,23 @@ using System.Text.Json.Serialization;
 namespace WindowsLoop.Tileset;
 
 /// <summary>
-/// 一格的阻挡类型。数值直接对应关卡 solid 层的一个字符（'0' / '1' / '2'），
+/// 一格的阻挡类型。数值直接对应关卡 solid 层的一个字符（'0' / '1' / '2' / '3'），
 /// 游戏、关卡编辑器、瓦片工具三端共用这一套，别各写各的。
 ///
 /// Block 挡四面；Platform 只挡"从上方落下"，从下往上、左右走过都不挡
 /// （暂时没有"站在平台上按下往下穿"的玩法）。
+///
+/// Crate 是**箱子**：和 Block 一样挡住玩家，但它不是地形，而是一个能被推动、
+/// 会自己下落的实体。数据上仍然写在 solid 层里（一格一个字符 '3'），
+/// 而且必须落在空瓦片格上 —— 地图里没有对应的图块，箱子由引擎单独画。
+/// 游戏读关卡时会把 '3' 的格子抽成箱子实体，之后箱子的位置归实体自己管。
 /// </summary>
 public enum SolidKind
 {
     Pass = 0,
     Block = 1,
     Platform = 2,
+    Crate = 3,
 }
 
 /// <summary>
@@ -46,6 +52,12 @@ public sealed class TileMeta
     [JsonPropertyName("climb")] public bool Climb { get; set; }
     [JsonPropertyName("spring")] public bool Spring { get; set; }
 
+    /// <summary>
+    /// 压力板：玩家或箱子与这一格重叠（身体所在格 / 脚底那一格）就算"被踩下"。
+    /// 它不影响阻挡，只是一条可以被事件触发器读到的状态。
+    /// </summary>
+    [JsonPropertyName("plate")] public bool Plate { get; set; }
+
     /// <summary>可选备注，写点「为什么这块是实心」之类的说明。</summary>
     [JsonPropertyName("note")] public string? Note { get; set; }
 
@@ -59,6 +71,7 @@ public sealed class TileMeta
         Water = Water,
         Climb = Climb,
         Spring = Spring,
+        Plate = Plate,
         Note = Note,
     };
 }
@@ -85,9 +98,12 @@ public sealed class TileMetaFile
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    public static TileMetaFile Load(string path)
+    public static TileMetaFile Load(string path) => Parse(File.ReadAllText(path));
+
+    /// <summary>从一段 JSON 直接解析：素材编在程序集里时没有文件可读。</summary>
+    public static TileMetaFile Parse(string json)
     {
-        var file = JsonSerializer.Deserialize<TileMetaFile>(File.ReadAllText(path), Opts);
+        var file = JsonSerializer.Deserialize<TileMetaFile>(json, Opts);
         if (file == null) return new TileMetaFile();
         file.Tiles ??= new List<TileMeta>();
         file._index = null;
@@ -223,6 +239,18 @@ public static class TileDefaults
         return _cache;
     }
 
+    /// <summary>
+    /// 从内存里的一段 JSON 装载。单文件分发的游戏走这条：meta 编在程序集里，
+    /// 没有文件路径可传，也就不该在磁盘上留副本。
+    /// </summary>
+    public static TileMetaFile LoadFromJson(string json, string label)
+    {
+        _cachePath = label;
+        try { _cache = TileMetaFile.Parse(json); }
+        catch { _cache = new TileMetaFile(); }   // 默认值读坏了不能把游戏拖死，全按 false 兜底
+        return _cache;
+    }
+
     /// <summary>重新读同一份文件，用于「重新载入瓦片默认值」菜单。</summary>
     public static void Reload() => LoadFrom(string.IsNullOrEmpty(_cachePath) ? AssetLocator.TileMetaPath : _cachePath);
 
@@ -250,4 +278,7 @@ public static class TileDefaults
 
     public static bool SpringOf(bool? explicitValue, IEnumerable<int> sprites) =>
         explicitValue ?? (ForSprites(sprites)?.Spring ?? false);
+
+    public static bool PlateOf(bool? explicitValue, IEnumerable<int> sprites) =>
+        explicitValue ?? (ForSprites(sprites)?.Plate ?? false);
 }
