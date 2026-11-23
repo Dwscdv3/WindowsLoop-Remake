@@ -221,20 +221,32 @@ internal sealed class Piece
 /// </summary>
 internal enum EventTrigger
 {
+    /// <summary>角色走进挂着这条事件的那一格。</summary>
     Touch,
+
+    /// <summary>指定的那块压力板被玩家或箱子压住。</summary>
     Plate,
+
+    /// <summary>
+    /// 每帧都判一次条件，不依赖角色位置、也不依赖压力板 ——
+    /// 关开局的过场、走到某个地方、把镜头滚到某处，都能用条件表达。
+    /// 触发之后是"只跑一次"还是"可以反复触发"由 <see cref="GridEvent.Repeat"/> 决定。
+    /// </summary>
+    Always,
 }
 
 /// <summary>
 /// 一条动作。对着任务计划程序里的"操作"：跳转到别的关卡，在电脑上打开程序 / 网址，
-/// 或者把一个图块藏起来。一条事件可以挂多条，按顺序执行；某条把地图切走了，后面的就不再执行。
+/// 把一个图块藏起来，或者放一段音效。一条事件可以挂多条，按顺序执行；
+/// 某条把地图切走了，后面的就不再执行。
 /// </summary>
 internal sealed class EventActionDef
 {
     /// <summary>
     /// "goto" = 跳转关卡，"run" = 执行命令 / 打开网址，
     /// "hide" = 隐藏事件绑定格的图块并且不再阻挡（这是**状态**而不是一次性动作：
-    /// 事件不激活了，图块就回来）。
+    /// 事件不激活了，图块就回来），
+    /// "sfx" = 播一次音效（Sound 是 <c>Shared\SfxCatalog.cs</c> 里的 key）。
     /// </summary>
     public string Type = "";
 
@@ -246,6 +258,9 @@ internal sealed class EventActionDef
 
     /// <summary>run 的命令行参数，可空。</summary>
     public string Args = "";
+
+    /// <summary>sfx 的音效 key（"unlock" / "gem" / "land" …）；认不出来的 key 静默跳过。</summary>
+    public string Sound = "";
 }
 
 /// <summary>
@@ -279,6 +294,16 @@ internal sealed class GridEvent
     public int PlateX = -1;
     public int PlateY = -1;
 
+    /// <summary>
+    /// 只对 <see cref="EventTrigger.Always"/> 有意义。
+    /// false = 触发一次就算过了，直到重开本关 / 换关之前都不会再触发（默认）；
+    /// true  = 条件每帧都判，成立就再触发一次，条件撤掉再成立还能再来。
+    ///
+    /// 重复触发的类型**不能执行命令**（run）：那会让同一帧反复开程序，
+    /// 所以那种事件里的 run 动作在运行期会被跳过（编辑器里会标出来）。
+    /// </summary>
+    public bool Repeat;
+
     /// <summary>按顺序执行的动作。空表 = 什么都不做（草稿）。</summary>
     public List<EventActionDef> Actions = new();
 
@@ -289,6 +314,9 @@ internal sealed class GridEvent
 
     /// <summary>只跑一次的动作（goto / run）。hide 是状态，不是一次性动作。</summary>
     public IEnumerable<EventActionDef> OneShots => Actions.Where(a => a.Type != "hide");
+
+    /// <summary>可重复触发的"总是"事件——这种事件不允许执行命令（run），见 <see cref="Repeat"/>。</summary>
+    public bool IsRepeating => Trigger == EventTrigger.Always && Repeat;
 }
 
 internal sealed class Level
@@ -484,8 +512,15 @@ internal sealed class Level
             ev.Trigger = (trig.GetString() ?? "") switch
             {
                 "plate" => EventTrigger.Plate,
+                "always" => EventTrigger.Always,
                 _ => EventTrigger.Touch,
             };
+
+        // "总是"触发器的重复方式；别的触发器写了也当没写（触碰 / 压力板自己就是状态型的）
+        if (ev.Trigger == EventTrigger.Always &&
+            e.TryGetProperty("repeat", out var rep) &&
+            (rep.ValueKind == JsonValueKind.True || rep.ValueKind == JsonValueKind.False))
+            ev.Repeat = rep.GetBoolean();
 
         // 压力板触发器的目标板：{"piece":"地图块","x":10,"y":8}，piece 可省（省略 = 绑定格所在的地图块）
         if (e.TryGetProperty("plate", out var plate) && plate.ValueKind == JsonValueKind.Object)
@@ -531,6 +566,8 @@ internal sealed class Level
             act.Target = tg.GetString() ?? "";
         if (a.TryGetProperty("args", out var ag) && ag.ValueKind == JsonValueKind.String)
             act.Args = ag.GetString() ?? "";
+        if (a.TryGetProperty("sound", out var sd) && sd.ValueKind == JsonValueKind.String)
+            act.Sound = sd.GetString() ?? "";
         return act;
     }
 

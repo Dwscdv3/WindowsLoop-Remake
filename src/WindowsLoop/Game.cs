@@ -1957,7 +1957,7 @@ internal sealed partial class Game
 
     // ── 网格事件 ──────────────────────────────────────────────────────────
 
-    /// <summary>本关已经触发过的**触碰**事件下标。每次读关卡 / 按 R 重置。</summary>
+    /// <summary>本关已经触发过的**一次性**事件下标（触碰 / 只跑一次的"总是"）。每次读关卡 / 按 R 重置。</summary>
     readonly HashSet<int> _firedEvents = new();
 
     /// <summary>
@@ -2109,7 +2109,8 @@ internal sealed partial class Game
     }
 
     /// <summary>
-    /// 每帧检查事件：先跑触碰，再看压力板的按压状态，最后重算"哪些格子被藏"。
+    /// 每帧检查事件：先跑触碰，再看压力板的按压状态，然后判"总是"触发的条件，
+    /// 最后重算"哪些格子被藏"。
     ///
     /// 触发口径：角色身体中心落在哪一格就算"碰到"那一格（和以前拿宝石一致）。
     /// 一格可以挂多条事件，**按顺序逐条判定**：条件满足就执行，不满足就跳过接着判下一条。
@@ -2130,6 +2131,7 @@ internal sealed partial class Game
 
         UpdateTouchEvents();
         UpdatePlateEvents();
+        UpdateAlwaysEvents();
         RebuildHidden();
     }
 
@@ -2158,6 +2160,55 @@ internal sealed partial class Game
 
             // 地图切换已经开始：剩下的取消，等新关卡把一切重置干净
             if (Fading) return;
+        }
+    }
+
+    /// <summary>
+    /// "总是"触发的事件：不看角色站在哪一格，**每帧**判一次条件。
+    ///
+    /// 两种模式：
+    ///   只跑一次（默认）—— 触发过就记进 <see cref="_firedEvents"/>，重开本关 / 换关之前不再触发；
+    ///   可重复触发    —— 激活状态跟着条件走（和压力板一个口径）：条件成立就触发、算激活，
+    ///                    条件撤掉就不算激活（hide 的图块会回来），下次再成立还能再触发。
+    ///
+    /// 可重复的那种**不允许执行命令**（run）：条件连着成立时每帧都会触发，
+    /// 那就等于每帧开一次程序。这里的 run 直接跳过，编辑器里也会标出来。
+    /// </summary>
+    void UpdateAlwaysEvents()
+    {
+        for (int i = 0; i < Level.Events.Count; i++)
+        {
+            var ev = Level.Events[i];
+            if (ev.Trigger != EventTrigger.Always) continue;
+
+            bool met = ConditionsMet(ev);
+
+            bool rising = true;
+            if (ev.Repeat)
+            {
+                // 状态型：条件成立 = 激活，撤掉就撤销（"隐藏本格"跟着回来）
+                bool wasActive = _activeEvents.Contains(i);
+                if (met) _activeEvents.Add(i);
+                else _activeEvents.Remove(i);
+                if (!met) continue;
+                rising = !wasActive;      // 只有条件"刚成立"的那一下才算一次
+            }
+            else
+            {
+                if (!met || _firedEvents.Contains(i)) continue;
+                _firedEvents.Add(i);
+                _activeEvents.Add(i);
+            }
+
+            foreach (var act in ev.Actions)
+            {
+                if (Fading) return;
+                if (ev.Repeat && act.Type == "run") continue;   // 重复触发不许执行命令
+                // 音效也不该每帧重放：条件连着成立时只在上升沿播一次，
+                // 否则一秒能叠 60 遍，听感直接糊掉
+                if (ev.Repeat && act.Type == "sfx" && !rising) continue;
+                Execute(act);
+            }
         }
     }
 
@@ -2198,7 +2249,8 @@ internal sealed partial class Game
 
     /// <summary>
     /// 重算隐藏格：一格上可能挂着好几条"隐藏本格"的事件，**只要有一条激活就藏**。
-    /// 触碰事件触发过就一直算激活，压力板事件跟着板子走，所以松开板子墙会重新出现。
+    /// 触碰 / 只跑一次的"总是"事件触发过就一直算激活；压力板和可重复的"总是"事件
+    /// 跟着自己的条件走，所以条件一撤墙就会重新出现。
     /// </summary>
     void RebuildHidden()
     {

@@ -10,9 +10,13 @@ namespace WindowsLoop;
 /// 静态图层不会再多挡一次。
 ///
 /// 位置有兩套坐标，别混用：
-///   <see cref="CellX"/> / <see cref="CellY"/> —— 逻辑格（整数，阻挡判定和压力板都用它）
-///   <see cref="X"/> / <see cref="Y"/>         —— 画在哪（格子左上角，连续；推箱补间和下落时才会离开整数）
+///   <see cref="CellX"/> / <see cref="CellY"/> —— 逻辑格：中心落在哪一格（**连续坐标，不折回**）
+///   <see cref="X"/> / <see cref="Y"/>         —— 画在哪（格子左上角，连续）
 /// 静止时两者重合，落点永远吸附在整数格上。
+///
+/// 逻辑格**不做环形折回**：碰撞要拿它去问「这一格在地图上属于哪块窗口」，
+/// 折回一个周期就等于问到了地图另一头，连通世界里会判成"外面是墙"。
+/// 需要地图内的下标时（压力板、箱子的占位比对）再各自折 —— 见 <c>Game.CrateAtCell</c>。
 /// </summary>
 internal sealed class Crate
 {
@@ -31,6 +35,14 @@ internal sealed class Crate
     public int ToX, ToY;
 
     public bool Falling;
+
+    /// <summary>
+    /// 物理被冻住：窗口连成一片、而这箱子又不在可见区域里的时候。
+    /// 那时它属于"原来的滚动世界"（环形地图），跟拼接后的世界没法换算，
+    /// 所以整个停掉，等窗口分开再接着掉 —— 不然脚下那格会被当成拼接外边界，
+    /// 每帧"落地"一次，压扁动画和落地音会一直循环。
+    /// </summary>
+    public bool PhysicsPaused;
 
     /// <summary>刚被推到位 / 刚落地时的压扁量（0..1），只影响绘制，用来做那一记"顿"。</summary>
     public float Impact;

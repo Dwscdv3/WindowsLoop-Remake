@@ -142,22 +142,26 @@ internal sealed partial class Game
     // ── 占位：逻辑格 ──────────────────────────────────────────────────────
 
     /// <summary>
-    /// 某一格上的箱子（按逻辑格取，坐标会绕回环形边界）。
+    /// 某一格上的箱子（按逻辑格取）。
     /// 压力板、窗口交接、箱子之间互相挤占都用它 —— 那是"占位"的口径，不是碰撞口径。
+    ///
+    /// 两边都折回一个周期再比：箱子的逻辑格是连续坐标（可能比地图尺寸大出好几圈），
+    /// 而调用方给的通常是地图里的下标。只在"占位"这里折，碰撞那条路不折 ——
+    /// 折了就等于把格子问到了地图另一头。
     /// </summary>
     public Crate? CrateAtCell(Piece piece, int x, int y, Crate? except = null)
     {
         int w = piece.Width, h = piece.Height;
         if (w <= 0 || h <= 0) return null;
-        int wx = ((x % w) + w) % w;
-        int wy = ((y % h) + h) % h;
+        int wx = WrapInt(x, w);
+        int wy = WrapInt(y, h);
 
         var list = Level.Crates;
         for (int i = 0; i < list.Count; i++)
         {
             var c = list[i];
             if (c == except || c.Piece != piece) continue;
-            if (c.CellX == wx && c.CellY == wy) return c;
+            if (WrapInt(c.CellX, w) == wx && WrapInt(c.CellY, h) == wy) return c;
         }
         return null;
     }
@@ -237,6 +241,191 @@ internal sealed partial class Game
         return hit;
     }
 
+    // ── 环形世界 ↔ 连通世界 ───────────────────────────────────────────────
+
+    /// <summary>
+    /// 这只箱子在窗口 <paramref name="w"/> 里**实际被画出来的**那一份（取景框里最靠中间的那份）。
+    /// 一份都没落在框里就返回 false。
+    ///
+    /// 判"可见"必须和绘制（<c>GameWindow.DrawCrates</c>）用同一个口径：
+    /// 地图比取景框高不了多少时（比如 12 格高的图配 10 格的框），同一只箱子会同时有两份落在框里，
+    /// 而"离镜头最近的那一份"可能恰好在框外 —— 只按最近的一份判，就会把一只
+    /// **明明画在画面里**的箱子当成"看不见"冻住，看着就是悬在空中不动。
+    /// </summary>
+    static bool TryCrateDrawnImage(GameWindow w, Crate c, out Vector2 image)
+    {
+        image = default;
+
+        int pw = c.Piece.Width, ph = c.Piece.Height;
+        if (pw <= 0 || ph <= 0)
+        {
+            image = new Vector2(c.X, c.Y);
+            return true;
+        }
+
+        // 挑"离箱子自己最近"的那一份，不是"离取景框中心最近"的。
+        // 地图高度≈取景框高度时，顶部和底部两份会同时在框里；按中心挑的话，
+        // 箱子明明在底部、却会被折到顶部那一份上 —— 每帧折一次，就是"在自己窗口里无限循环"。
+        float cx = c.X + 0.5f;
+        float cy = c.Y + 0.5f;
+
+        int kx0 = (int)MathF.Floor((w.CamX - 1f - c.X) / pw);
+        int kx1 = (int)MathF.Ceiling((w.CamX + GameWindow.ViewTilesX + 1f - c.X) / pw);
+        int ky0 = (int)MathF.Floor((w.CamY - 1f - c.Y) / ph);
+        int ky1 = (int)MathF.Ceiling((w.CamY + GameWindow.ViewTilesY + 1f - c.Y) / ph);
+
+        float best = float.MaxValue;
+        bool found = false;
+
+        for (int ky = ky0; ky <= ky1; ky++)
+            for (int kx = kx0; kx <= kx1; kx++)
+            {
+                float x = c.X + kx * pw, y = c.Y + ky * ph;
+
+                // 这一份要和取景框真的交叠（和 DrawCrates 里那次裁剪同一个意思）
+                if (x + 1f < w.CamX || x > w.CamX + GameWindow.ViewTilesX) continue;
+                if (y + 1f < w.CamY || y > w.CamY + GameWindow.ViewTilesY) continue;
+
+                float dx = x - c.X, dy = y - c.Y;
+                float d = dx * dx + dy * dy;
+                if (d >= best) continue;
+
+                best = d;
+                image = new Vector2(x, y);
+                found = true;
+            }
+
+        return found;
+    }
+
+    /// <summary>离镜头最近的那一份，露没露在取景框里（以"画出来的那一份"为准）。</summary>
+    static bool CrateVisibleIn(GameWindow w, Crate c) => TryCrateDrawnImage(w, c, out _);
+
+    /// <summary>箱子整块和这块窗口的取景框有交叠吗。</summary>
+    static bool CrateTouchesWindow(GameWindow w, Crate c)
+    {
+        var u = ViewLocal(w, new Vector2(c.X, c.Y));
+        return u.X + 1f > 0f && u.X < GameWindow.ViewTilesX &&
+               u.Y + 1f > 0f && u.Y < GameWindow.ViewTilesY;
+    }
+
+    /// <summary>
+    /// "刚跨出去"：整块已经在取景框外，但还贴着框边（2 格以内）。
+    /// 这种情况要**先换窗口、不能先折叠** —— 折叠会把窗口另一头的周期副本当成"画面上的那一份"
+    /// 拽过来，跨出底边的箱子就被折回顶部，于是永远走不到接缝（在自己的窗口里无限循环）。
+    /// 离得远的（环形世界里飘了好几圈）不算，那种要折回来。
+    /// </summary>
+    static bool CrateNearOutside(GameWindow w, Crate c)
+    {
+        if (CrateTouchesWindow(w, c)) return false;
+
+        const float margin = 2f;
+        var u = ViewLocal(w, new Vector2(c.X, c.Y));
+        return u.X + 1f >= -margin && u.X <= GameWindow.ViewTilesX + margin &&
+               u.Y + 1f >= -margin && u.Y <= GameWindow.ViewTilesY + margin;
+    }
+
+    /// <summary>
+    /// 把箱子的连续坐标折到"画出来的那一份"上。
+    ///
+    /// 什么时候需要它：窗口连上了，世界从"环形"变成"有边界的拼接"。箱子之前可能已经
+    /// 沿着环形地图掉出去好几个地图高（连续坐标远超地图尺寸），而拼接世界只有眼前这一片 ——
+    /// 得先把它收回**画面上那一份**，坐标和画面才是同一个东西，之后的下落/落地也才对得上。
+    /// 骑在它上面的人跟着一起折，否则会被拽走整数个地图高。
+    /// </summary>
+    void FoldCrateIntoView(GameWindow w, Crate c)
+    {
+        if (!TryCrateDrawnImage(w, c, out var p)) return;   // 一份都没画出来：保持原样
+
+        float dx = p.X - c.X, dy = p.Y - c.Y;
+        if (MathF.Abs(dx) < 1e-4f && MathF.Abs(dy) < 1e-4f) return;
+
+        c.X = p.X;
+        c.Y = p.Y;
+
+        // 逻辑格跟着一起折；同样是连续坐标，不做环形折回
+        c.CellX = (int)MathF.Floor(c.X + 0.5f);
+        c.CellY = (int)MathF.Floor(c.Y + 0.5f);
+
+        if (c == _rideCrate && Player.Piece == c.Piece)
+            Player.Pos = new Vector2(Player.Pos.X + dx, Player.Pos.Y + dy);
+    }
+
+    static int WrapInt(int v, int period) => ((v % period) + period) % period;
+
+    /// <summary>
+    /// 箱子掉出自己这块窗口、落到相邻窗口那边去时，换到对方的地图上。
+    /// 换算和角色的 <c>TransferIfCrossed</c> 完全一样（只用两块窗口的相对位移，不经过屏幕坐标）。
+    /// </summary>
+    void TransferCrateIfCrossed(Crate c)
+    {
+        if (c.Sliding) return;   // 补间期间别换地图，等它落定
+
+        var w = WindowFor(c.Piece);
+        if (w == null || !w.HasNeighbors) return;   // 没连成一片：还是环形世界，不换
+
+        var u = ViewLocal(w, new Vector2(c.X, c.Y));
+
+        // ① 还和自己这块窗口有交叠就留在原地：只露出一半的时候它还画在自己窗格里，
+        //    这时候换过去，看到的就是箱子莫名闪进隔壁。
+        if (u.X + 1f > 0f && u.X < GameWindow.ViewTilesX &&
+            u.Y + 1f > 0f && u.Y < GameWindow.ViewTilesY) return;
+
+        // ①b 只处理"刚跨出去"的那种：位置得还贴着框边（留 2 格余量）。
+        //     差了好几圈的坐标是在环形世界里飘着的，拿它去换窗口等于瞬移。
+        if (u.X + 1f < -2f || u.X > GameWindow.ViewTilesX + 2f ||
+            u.Y + 1f < -2f || u.Y > GameWindow.ViewTilesY + 2f) return;
+
+        GameWindow? best = null;
+        float bestArea = 0f;
+        Vector2 bestDelta = default;
+
+        foreach (var target in w.Neighbors)
+        {
+            if (target.IsDisposed) continue;
+
+            var off = ViewOffset(w, target);
+            var tl = u - off;   // 箱子在对方画面里的左上角
+
+            // ② 按"箱子矩形和对方取景框的交叠面积"挑候选。
+            //    只问中心点的话，贴着右边缘往下掉的箱子，中心已经出了下面那块窗口，
+            //    就会被判成"不该换"，于是卡死在接缝上。
+            float ox = MathF.Min(tl.X + 1f, GameWindow.ViewTilesX) - MathF.Max(tl.X, 0f);
+            float oy = MathF.Min(tl.Y + 1f, GameWindow.ViewTilesY) - MathF.Max(tl.Y, 0f);
+            if (ox <= 0f || oy <= 0f) continue;
+
+            float area = ox * oy;
+
+            // ③ 面积并列时优先往下 —— 重力方向，拐角处不会因为遍历顺序左右乱跳
+            bool better = area > bestArea + 1e-4f
+                || (MathF.Abs(area - bestArea) <= 1e-4f && target == w.NeighborBottom);
+
+            if (!better) continue;
+
+            best = target;
+            bestArea = area;
+            bestDelta = new Vector2(target.CamX - w.CamX - off.X, target.CamY - w.CamY - off.Y);
+        }
+
+        if (best == null) return;
+
+        // 骑在它上面的人跟着一起换地图：位置挪过去、Piece 也换 —— 只挪坐标不换 Piece，
+        // 人就会挂着旧地图的坐标，下一帧 CanRide 直接判"不是同一张地图"把人甩下来。
+        bool riding = c == _rideCrate && Player.Piece == c.Piece;
+
+        c.Piece = best.Piece;
+        c.X += bestDelta.X;
+        c.Y += bestDelta.Y;
+        c.CellX = (int)MathF.Floor(c.X + 0.5f);
+        c.CellY = (int)MathF.Floor(c.Y + 0.5f);
+
+        if (riding)
+        {
+            Player.Piece = best.Piece;
+            Player.Pos += bestDelta;
+        }
+    }
+
     // ── 每帧 ──────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -251,6 +440,48 @@ internal sealed partial class Game
         for (int i = 0; i < crates.Count; i++)
         {
             var c = crates[i];
+
+            // 窗口连成一片之后，世界从"环形"变成"有边界的拼接"，两者不能混着算：
+            //   · 箱子就在可见区域里 → 当场转入连通世界：先把连续坐标折到画出来的那一份，
+            //     之后按拼接规则下落（接缝对面照样接得住，掉进对面窗口就换地图）；
+            //   · 箱子在可见区域外 → 它只属于原来的滚动世界，跟拼接世界没法换算。
+            //     物理整个冻住，等窗口分开再接着掉。
+            //     以前不冻：脚下那一格落到取景框外就被当成拼接外边界，于是每帧"落地"一次 ——
+            //     箱子悬在空中、压扁动画和落地音一直循环。
+            var w = WindowFor(c.Piece);
+            if (w == null)
+            {
+                c.PhysicsPaused = true;   // 这张地图没有窗口显示：看不见的东西不动
+                continue;
+            }
+
+            // ① 刚跨出这块窗口（贴着框边、整块在外面）→ 交给隔壁。
+            //    这一步必须在折叠之前：折叠会把窗口另一头的周期副本拽过来，
+            //    跨出底边的箱子就被"折"回顶部，永远走不到接缝（在窗口里无限循环）。
+            if (w.HasNeighbors && !c.Sliding && CrateNearOutside(w, c))
+            {
+                TransferCrateIfCrossed(c);
+                w = WindowFor(c.Piece);
+                if (w == null) { c.PhysicsPaused = true; continue; }
+            }
+
+            // ② 还在窗口里的（或是在环形世界里飘了好几圈的）→ 归一到"画出来的那一份"。
+            //    窗口分开那段时间箱子是自由环行的，连续坐标可能差了好几圈；不先收回来，
+            //    后面的碰撞就是在拿"地图另一头"的位置算。
+            if (w.HasNeighbors && !c.Sliding) FoldCrateIntoView(w, c);
+
+            // ③ 折叠之后位置可能变了，再给换窗口一次机会
+            if (w.HasNeighbors) TransferCrateIfCrossed(c);
+            w = WindowFor(c.Piece);
+            if (w == null) { c.PhysicsPaused = true; continue; }
+
+            if (w.HasNeighbors && !CrateVisibleIn(w, c))
+            {
+                c.PhysicsPaused = true;
+                continue;
+            }
+
+            c.PhysicsPaused = false;
 
             if (c.Sliding) StepSlide(c, dt);
 
@@ -273,6 +504,7 @@ internal sealed partial class Game
 
             if (c.Impact > 0f) c.Impact = MathF.Max(0f, c.Impact - dt / CrateImpactDecay);
         }
+
     }
 
     /// <summary>还能不能算"踩在这只箱子上"：同一张地图、脚在箱顶附近、横向还压着、没在起跳。</summary>
@@ -475,8 +707,6 @@ internal sealed partial class Game
     /// </summary>
     void StepFall(Crate c, float dt)
     {
-        int ph = c.Piece.Height;
-
         c.VY = MathF.Min(c.VY + CrateGravity * dt, CrateMaxFallSpeed);
 
         float remain = c.VY * dt;
@@ -490,7 +720,7 @@ internal sealed partial class Game
 
             if (CrateCellBlocked(c.Piece, c.CellX, row, c))
             {
-                c.Y = MathF.Max(0f, row - 1f);   // 贴着那一行的上沿，正好是整数格
+                c.Y = row - 1f;   // 贴着那一行的上沿，正好是整数格（不再往 0 夹：坐标是连续的，可以在地图上方）
                 c.CellY = row - 1;
                 c.VY = 0f;
                 c.Falling = false;
@@ -502,9 +732,9 @@ internal sealed partial class Game
             c.Y = ny;
         }
 
-        // 逻辑格折回地图内：压力板 / 阻挡 / CrateAtCell 都是按格索引比对的
-        int cy = (int)MathF.Floor(c.Y + 0.5f);
-        c.CellY = ph > 0 ? ((cy % ph) + ph) % ph : cy;
+        // 逻辑格跟着视觉位置走（连续坐标，**不折回**）：
+        // 折回就等于把箱子问到地图另一头去，连通世界里那一格可能是"外面"，会被判成落地。
+        c.CellY = (int)MathF.Floor(c.Y + 0.5f);
     }
 
     // ── 给绘制用的小查询 ──────────────────────────────────────────────────
