@@ -470,12 +470,13 @@ internal sealed class LevelDoc
 /// <summary>
 /// 一条动作（对着任务计划程序里的"操作"）。
 /// goto = 跳转到指定关卡；run = 在电脑上打开程序 / 网址 / 文件；
-/// hide = 把事件绑定的那几格图块藏起来、并且不再阻挡。
+/// hide = 把事件绑定的那几格图块藏起来、并且不再阻挡；
+/// sfx = 播一次音效（Sound 是 Shared\SfxCatalog.cs 里的 key）。
 /// 一条事件可以挂多条，按顺序执行。
 /// </summary>
 internal sealed class ActionDoc
 {
-    /// <summary>"goto" / "run" / "hide"；认不出来的值游戏里按"什么都不做"处理。</summary>
+    /// <summary>"goto" / "run" / "hide" / "sfx"；认不出来的值游戏里按"什么都不做"处理。</summary>
     [JsonPropertyName("type")] public string Type { get; set; } = "goto";
 
     /// <summary>goto 的目标关卡（assets/levels 下的文件名，不带 .json）。留空 = 还没填。</summary>
@@ -487,6 +488,9 @@ internal sealed class ActionDoc
     /// <summary>run 的命令行参数，可空。</summary>
     [JsonPropertyName("args")] public string Args { get; set; } = "";
 
+    /// <summary>sfx 的音效 key（"unlock" / "gem" / "land" …），下拉框里选，留空 = 还没选。</summary>
+    [JsonPropertyName("sound")] public string Sound { get; set; } = "";
+
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
 
     public ActionDoc Clone() => new()
@@ -495,15 +499,17 @@ internal sealed class ActionDoc
         Level = Level,
         Target = Target,
         Args = Args,
+        Sound = Sound,
         Extra = Extra,
     };
 
-    /// <summary>这条动作还缺必需的目标（跳关没选关卡 / 执行命令没填目标）。</summary>
+    /// <summary>这条动作还缺必需的目标（跳关没选关卡 / 执行命令没填目标 / 音效没选）。</summary>
     [JsonIgnore]
     public bool IsUnset => Type switch
     {
         "goto" => string.IsNullOrWhiteSpace(Level),
         "run" => string.IsNullOrWhiteSpace(Target),
+        "sfx" => string.IsNullOrWhiteSpace(Sound),
         _ => false,
     };
 
@@ -512,6 +518,7 @@ internal sealed class ActionDoc
         "goto" => "跳转 " + (string.IsNullOrWhiteSpace(Level) ? "(未填)" : Level),
         "run" => "执行 " + (string.IsNullOrWhiteSpace(Target) ? "(未填)" : Shorten(Target)),
         "hide" => "隐藏本格图块（不再阻挡）",
+        "sfx" => "音效 " + (string.IsNullOrWhiteSpace(Sound) ? "(未选)" : SfxCatalog.LabelOf(Sound)),
         _ => "无动作(" + Type + ")",
     };
 
@@ -574,8 +581,16 @@ internal sealed class EventDoc
 {
     [JsonPropertyName("name")] public string Name { get; set; } = "";
 
-    /// <summary>触发器："touch"（角色走进这一格）/ "plate"（指定的压力板被压住）。</summary>
+    /// <summary>触发器："touch"（角色走进这一格）/ "plate"（指定的压力板被压住）/ "always"（每帧判条件）。</summary>
     [JsonPropertyName("trigger")] public string Trigger { get; set; } = "touch";
+
+    /// <summary>
+    /// trigger == "always" 时的重复方式：true = 条件成立就反复触发，false = 只触发一次。
+    /// 重复触发的事件不能执行命令（run），游戏里会跳过那条动作。
+    /// </summary>
+    [JsonPropertyName("repeat")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Repeat { get; set; }
 
     /// <summary>trigger == "plate" 时盯的那块板。</summary>
     [JsonPropertyName("plate")] public PlateRefDoc? Plate { get; set; }
@@ -595,6 +610,7 @@ internal sealed class EventDoc
     {
         Name = Name,
         Trigger = Trigger,
+        Repeat = Repeat,
         Plate = Plate?.Clone(),
         Actions = Actions?.Select(a => a.Clone()).ToList(),
         Conditions = Conditions?.Select(c => c.Clone()).ToList(),
@@ -605,6 +621,14 @@ internal sealed class EventDoc
     [JsonIgnore]
     public bool HasUnsetAction => Actions?.Any(a => a.IsUnset) ?? false;
 
+    /// <summary>这条事件里有没有「隐藏本格」的动作（它需要绑定格才有格子可藏）。</summary>
+    [JsonIgnore]
+    public bool HidesCell => Actions?.Any(a => a.Type == "hide") ?? false;
+
+    /// <summary>可重复触发的「总是」事件里，游戏会跳过的命令动作。</summary>
+    [JsonIgnore]
+    public bool RepeatingRunsCommand => Trigger == "always" && Repeat && (Actions?.Any(a => a.Type == "run") ?? false);
+
     public string Describe()
     {
         var acts = Actions ?? new List<ActionDoc>();
@@ -613,7 +637,12 @@ internal sealed class EventDoc
             : acts.Count == 1 ? acts[0].Describe() : $"{acts[0].Describe()} 等 {acts.Count} 条动作";
         int n = Conditions?.Count ?? 0;
         string cond = n == 0 ? "" : $"  [{n} 条件]";
-        string trig = Trigger == "plate" ? $"板{Plate?.Describe() ?? "(未选)"} → " : "";
+        string trig = Trigger switch
+        {
+            "plate" => $"板{Plate?.Describe() ?? "(未选)"} → ",
+            "always" => Repeat ? "总是·每帧 → " : "总是·一次 → ",
+            _ => "",
+        };
         return $"{trig}{act}{cond}";
     }
 }
@@ -858,7 +887,14 @@ internal static class LevelStore
         {
             var ev = doc.Events[i];
             if (ev.HasUnsetAction) list.Add($"事件 #{i} 有动作还没填目标");
-            if (!used.Contains(i)) list.Add($"事件 #{i} 没挂到任何格子");
+
+            // "总是"触发不依赖绑定格，只有带「隐藏本格」动作的才必须有格子可藏
+            bool needsCell = ev.Trigger != "always" || ev.HidesCell;
+            if (!used.Contains(i) && needsCell) list.Add($"事件 #{i} 没挂到任何格子");
+
+            // 重复触发的「总是」事件不允许执行命令：游戏里会跳过 run，这里先提醒
+            if (ev.RepeatingRunsCommand)
+                list.Add($"事件 #{i} 可重复触发，不能执行命令 —— run 动作在游戏里会被忽略");
 
             // 压力板触发器：坐标越界 / 指错了板子的，游戏里永远不激活
             if (ev.Trigger == "plate")
@@ -1304,9 +1340,11 @@ internal static class SelfTest
             if (aa[i].Level != ab[i].Level) return false;
             if (aa[i].Target != ab[i].Target) return false;
             if (aa[i].Args != ab[i].Args) return false;
+            if (aa[i].Sound != ab[i].Sound) return false;
         }
         // 压力板触发器：写进 JSON 再读回来不能丢
         if (a.Trigger != b.Trigger) return false;
+        if (a.Repeat != b.Repeat) return false;
         if (a.Plate == null || b.Plate == null)
         {
             if (a.Plate != b.Plate) return false;
@@ -1347,7 +1385,28 @@ internal static class SelfTest
             },
         });
         doc.Events.Add(new EventDoc { Name = "草稿", Actions = new List<ActionDoc> { new() { Type = "goto", Level = "" } } });
-        doc.Events.Add(new EventDoc { Name = "开程序", Actions = new List<ActionDoc> { new() { Type = "run", Target = "notepad.exe", Args = "a.txt" } } });
+        doc.Events.Add(new EventDoc { Name = "开程序", Actions = new List<ActionDoc> { new() { Type = "run", Target = "notepad.exe", Args = "a.txt" }, new() { Type = "sfx", Sound = "unlock" } } });
+        // 「总是」触发器：只跑一次的带条件隐藏；可重复的挂一条 run（校验要提醒会被忽略）
+        doc.Events.Add(new EventDoc
+        {
+            Name = "镜头滚到位就藏",
+            Trigger = "always",
+            Actions = new List<ActionDoc> { new() { Type = "hide" } },
+            Conditions = new List<ConditionDoc> { new() { Piece = "*", CamX = new[] { 0f, 4f } } },
+        });
+        doc.Events.Add(new EventDoc
+        {
+            Name = "每帧跑命令（会被忽略）",
+            Trigger = "always",
+            Repeat = true,
+            Actions = new List<ActionDoc> { new() { Type = "run", Target = "x.exe" } },
+        });
+        // 播放音效：没选音效的当成"还没填"，编辑器要标红
+        doc.Events.Add(new EventDoc
+        {
+            Name = "音效没选",
+            Actions = new List<ActionDoc> { new() { Type = "sfx", Sound = "" } },
+        });
 
         // 一格挂两条事件；另一格挂同样的组合 → 应该复用同一个组
         doc.SetCellEvents(p, 3, 3, new[] { 0, 2 });
@@ -1360,22 +1419,35 @@ internal static class SelfTest
 
         string json = LevelStore.Serialize(doc);
         bool keys = json.Contains("\"events\"") && json.Contains("\"evtSeq\"") &&
-                    json.Contains("\"actions\"") && json.Contains("\"conditions\"");
+                    json.Contains("\"actions\"") && json.Contains("\"conditions\"") &&
+                    json.Contains("\"sound\"") && json.Contains("unlock");
         bool noLegacy = !json.Contains("\"action\":") && !json.Contains("\"when\":");
 
         var back = LevelStore.Deserialize(json);
-        bool eventsKept = back.Events.Count == 3 &&
+        bool eventsKept = back.Events.Count == 6 &&
                           back.Events.Zip(doc.Events).All(t => SameEvent(t.First, t.Second));
         bool cellsKept = SameSeq(back.SeqOf(back.Pieces[0], 3, 3), new List<int> { 0, 2 }) &&
                          SameSeq(back.SeqOf(back.Pieces[0], 4, 3), new List<int> { 1 });
-        bool unsetFlag = back.Events[1].HasUnsetAction && !back.Events[0].HasUnsetAction;
+        bool unsetFlag = back.Events[1].HasUnsetAction && !back.Events[0].HasUnsetAction &&
+                         back.Events[5].HasUnsetAction;
+        bool sfxKept = back.Events[2].Actions is { Count: 2 } sfxActs &&
+                       sfxActs[1].Type == "sfx" && sfxActs[1].Sound == "unlock" &&
+                       sfxActs[1].Describe().Contains("开锁");
         bool warned = LevelStore.Warnings(back).Any(w => w.Contains("有动作还没填目标"));
+
+        // 「总是」触发器：repeat 往返不丢；带 hide 不挂格子要警告，不带 hide 的不挂格子没事；
+        // 重复 + run 要提醒会被忽略
+        bool repeatKept = back.Events[3].Trigger == "always" && !back.Events[3].Repeat &&
+                          back.Events[4].Trigger == "always" && back.Events[4].Repeat;
+        bool hideCellWarned = LevelStore.Warnings(back).Any(w => w.Contains("#3") && w.Contains("没挂到任何格子"));
+        bool noCellOk = !LevelStore.Warnings(back).Any(w => w.Contains("#4") && w.Contains("没挂到任何格子"));
+        bool runWarned = LevelStore.Warnings(back).Any(w => w.Contains("#4") && w.Contains("不能执行命令"));
 
         // 删掉事件 #0：格子里的引用要跟着消失、>=1 的下标整体前移，组表压紧
         back.RemoveEvent(0);
         bool remapped = SameSeq(back.SeqOf(back.Pieces[0], 3, 3), new List<int> { 1 }) &&
                         SameSeq(back.SeqOf(back.Pieces[0], 4, 3), new List<int> { 0 }) &&
-                        back.Events.Count == 2 &&
+                        back.Events.Count == 5 &&
                         back.Events[1].Actions?[0].Target == "notepad.exe";
 
         // 清空格子后，保存时组表不该留下没人引用的组
@@ -1404,7 +1476,8 @@ internal static class SelfTest
 
         lines.Add($"grid events: keys={(keys ? "yes" : "no")} noLegacy={(noLegacy ? "yes" : "no")} " +
                   $"sharedGroup={sharedGroup} seq={(seqOk ? "ok" : "bad")} events={(eventsKept ? "ok" : "lost")} " +
-                  $"cells={(cellsKept ? "ok" : "lost")} unsetFlag={unsetFlag} warned={warned} " +
+                  $"cells={(cellsKept ? "ok" : "lost")} unsetFlag={unsetFlag} sfx={(sfxKept ? "ok" : "lost")} warned={warned} " +
+                  $"repeatKept={repeatKept} hideCellWarned={hideCellWarned} noCellOk={noCellOk} runWarned={runWarned} " +
                   $"remapped={remapped} droppedUnused={dropped} legacyUpgrade={upgraded} " +
                   $"noKeyWhenEmpty={(noKeys ? "yes" : "no")} " +
                   $"expect all=true");

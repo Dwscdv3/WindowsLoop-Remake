@@ -90,6 +90,20 @@ internal static class Program
                 if (!enough || !switched || !back) fail++;
             }
             else lines.Add("level777.json missing, skip event switch check");
+
+            // 「播放音效」动作：类型下拉 4 项；切到音效后目标框只能下拉选，加完读回来是 sfx + unlock
+            if (File.Exists(levelPath))
+            {
+                using var a = new MainForm(levelPath);
+                int acts0 = a.ActionCount;
+                var (typeItems, added, targetListOnly) = a.AddActionViaUi(3, SfxCatalog.IndexOf("unlock"));
+                bool sfxUi = typeItems == 4 && added is { Type: "sfx" } &&
+                             added.Sound == "unlock" && added.Describe().Contains("开锁") &&
+                             targetListOnly && a.ActionCount == acts0 + 1;
+                lines.Add($"sfxAction typeItems={typeItems} sound={added?.Sound} " +
+                          $"listOnly={targetListOnly} count={acts0}->{a.ActionCount}");
+                if (!sfxUi) fail++;
+            }
         }
         catch (Exception ex)
         {

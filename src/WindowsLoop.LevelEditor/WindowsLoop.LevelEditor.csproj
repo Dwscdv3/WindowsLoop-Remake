@@ -14,6 +14,8 @@
   <!-- 瓦片默认属性的模型和瓦片工具 / 游戏共用一份源文件，判定口径不会漂。 -->
   <ItemGroup>
     <Compile Include="..\Shared\TileMeta.cs" Link="Shared\TileMeta.cs" />
+    <!-- 事件「播放音效」的音效目录：游戏和关卡编辑器共用同一份，key 不会写岔。 -->
+    <Compile Include="..\Shared\SfxCatalog.cs" Link="Shared\SfxCatalog.cs" />
   </ItemGroup>
 
   <!-- 构建时把瓦片工具的数据复制进自己的输出目录。

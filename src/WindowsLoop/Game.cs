@@ -2345,6 +2345,11 @@ internal sealed partial class Game
                 // 状态型操作：不做"一次性"的事，格子藏不藏由 RebuildHidden 按激活状态决定。
                 // 走到这里说明某条事件被触发了，隐藏会在这一帧末尾自然生效。
                 break;
+
+            case "sfx":
+                // 播一次音效；key 没注册就静默跳过（编辑器里下拉选的值不会写错）
+                Audio.PlayByKey(act.Sound);
+                break;
         }
     }
 

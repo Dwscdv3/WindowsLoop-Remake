@@ -17,6 +17,8 @@ internal enum Sfx
     Choo,
     /// <summary>窗口数到顶、开不出新窗口时的连续"啊"。</summary>
     CantOpen,
+    /// <summary>关卡事件动作「播放音效」里可选的"开锁"（事件按 key 触发）。</summary>
+    Unlock,
 }
 
 /// <summary>
@@ -50,6 +52,8 @@ internal sealed class AudioManager : IDisposable
     const string AhhhName = "sneeze-ahhh";                 // 吐出前的蓄力
     const string ChooName = "sneeze-choo";                 // 窗口飞出去
     const string CantOpenName = "sneeze-ah-ah-ahah-ahh-ahah"; // 到上限时的连续"啊"
+    /// <summary>开锁：tools/gen_unlock_sfx.py 合成的金属"嗒"+ 锁舌 + 上行铃音。</summary>
+    const string UnlockName = "unlock";
 
     const float BgmVolume = 0.34f;
 
@@ -82,12 +86,37 @@ internal sealed class AudioManager : IDisposable
         [Sfx.Transfer] = (AltName, 0.42f, 0.28f, false, 0f),
         [Sfx.Win] = (GemName, 1.00f, 0f, false, 0f),
         // 撞屏幕边：一声就够，重复触发直接忽略。
-        // 音量 0.84 —— 对齐试听时的响度：RMS 比 choo 高约 2dB，压在尾音上也听得清
+        // 音量 0.84 —— 对齐试听时的响度：压在喷嚏尾音上也听得清
         [Sfx.Bump] = (BumpName, 0.84f, 0.35f, true, 0.05f),
-        // 蓄力 / 飞出 / 开不出新窗口：素材本身没有爆音，别截断
-        [Sfx.Ahhh] = (AhhhName, 0.85f, 0f, false, 0f),
-        [Sfx.Choo] = (ChooName, 0.95f, 0f, false, 0f),
-        [Sfx.CantOpen] = (CantOpenName, 0.80f, 0f, false, 0f),
+        // 蓄力 / 飞出 / 开不出新窗口：素材本身没有爆音，别截断。
+        // 三段喷嚏素材的峰值和 RMS 都比合成音效高，整体比原调压低 15%（约 -1.4dB），
+        // 落在 BGM 上面不会盖住走路音
+        [Sfx.Ahhh] = (AhhhName, 0.72f, 0f, false, 0f),
+        [Sfx.Choo] = (ChooName, 0.80f, 0f, false, 0f),
+        [Sfx.CantOpen] = (CantOpenName, 0.68f, 0f, false, 0f),
+        // 开锁：完整播放（铃音尾巴别截），0.06s 内重复触发算同一次，避免叠成糊响
+        [Sfx.Unlock] = (UnlockName, 0.90f, 0f, false, 0.06f),
+    };
+
+    /// <summary>
+    /// 事件动作「播放音效」的 key → 音效；key 表在 <c>Shared\SfxCatalog.cs</c>，
+    /// 两边必须对得上 —— 编辑器下拉里出现、这里没注册的 key，游戏里按"没声音"处理。
+    /// </summary>
+    static readonly Dictionary<string, Sfx> SfxByKey = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["unlock"] = Sfx.Unlock,
+        ["jump"] = Sfx.Jump,
+        ["land"] = Sfx.Land,
+        ["gem"] = Sfx.Gem,
+        ["win"] = Sfx.Win,
+        ["window"] = Sfx.WindowOpen,
+        ["snap"] = Sfx.Snap,
+        ["release"] = Sfx.Release,
+        ["transfer"] = Sfx.Transfer,
+        ["bump"] = Sfx.Bump,
+        ["ahhh"] = Sfx.Ahhh,
+        ["choo"] = Sfx.Choo,
+        ["cantopen"] = Sfx.CantOpen,
     };
 
     WasapiPlayer? _output;
@@ -366,6 +395,20 @@ internal sealed class AudioManager : IDisposable
         catch { }
     }
 
+    /// <summary>自测用：这个 key 注册过没有（目录和注册表漂了就会在这里露出来）。</summary>
+    public static bool IsKnownKey(string key) => SfxByKey.ContainsKey(key ?? "");
+
+    /// <summary>
+    /// 事件动作「播放音效」：按关卡 JSON 里的 key（见 Shared\SfxCatalog.cs）播放一次。
+    /// 返回 false 表示这个 key 没注册 —— 游戏里静默跳过，不当错误处理。
+    /// </summary>
+    public bool PlayByKey(string key)
+    {
+        if (!SfxByKey.TryGetValue(key ?? "", out Sfx sfx)) return false;
+        Play(sfx);
+        return true;
+    }
+
     /// <summary>把一条通道从混音器摘掉并释放；摘除动作只影响它自己。</summary>
     void Drop(Voice v)
     {
@@ -523,6 +566,7 @@ internal static class AudioSelfTest
             "walk-gravel-loop-200bpm", "walk-loop",
             "Land 1", "Land 4", "Game Item 32",
             "whoosh", "bump", "sneeze-ahhh", "sneeze-choo", "sneeze-ah-ah-ahah-ahh-ahah",
+            "unlock",
         };
         foreach (string name in names)
         {
@@ -552,6 +596,7 @@ internal static class AudioSelfTest
                      (Sfx.Ahhh, "Ahhh/蓄力"),
                      (Sfx.Choo, "Choo/飞出"),
                      (Sfx.CantOpen, "CantOpen/开不出"),
+                     (Sfx.Unlock, "Unlock/开锁"),
                  })
         {
             var (peakDb, rms, sec, note) = am.ProbeSfx(sfx);

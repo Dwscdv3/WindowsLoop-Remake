@@ -89,8 +89,11 @@ internal sealed class MainForm : Form
     readonly ListBox _eventList = new();
     readonly TextBox _evtName = new();
     readonly ComboBox _evtTrigger = new(), _actType = new(), _actTarget = new();
+    readonly Label _actTargetLabel = new();
     readonly TextBox _actArgs = new();
     readonly ListBox _actList = new();
+    /// <summary>动作类型下拉上一次的选中项，用来判断"从音效切走"要不要清空目标框。</summary>
+    int _actMode = -1;
     readonly ListBox _condList = new();
     readonly ComboBox _condPiece = new();
     readonly NumericUpDown _camXMin = new(), _camXMax = new(), _camYMin = new(), _camYMax = new();
@@ -98,6 +101,8 @@ internal sealed class MainForm : Form
     readonly ListBox _cellEvtList = new();
     readonly Label _cellEvtLabel = new();
     readonly ComboBox _platePiece = new();
+    readonly CheckBox _evtRepeat = new();
+    readonly Label _triggerHint = new();
     readonly NumericUpDown _plateX = new(), _plateY = new();
     readonly Font _tagFont = new("Consolas", 9f, FontStyle.Bold);
     readonly WheelRouter _wheelRouter;
@@ -1727,6 +1732,29 @@ internal sealed class MainForm : Form
         return _evtIndex == index && _evtName.Text == _doc.Events[index].Name;
     }
 
+    /// <summary>给 --uicheck 用：当前选中事件挂了几条动作。</summary>
+    internal int ActionCount => CurEvent?.Actions?.Count ?? 0;
+
+    /// <summary>
+    /// 给 --uicheck 用：按真实的 UI 路径加一条动作（切类型 → 填目标 → 点"添加动作"），
+    /// 返回类型下拉项数、加完读回来的那条动作、目标框是不是"只能选不能打"。
+    /// 音效那条路径全靠下拉切换，最容易接错，所以让自检直接走一遍。
+    /// </summary>
+    internal (int TypeItems, ActionDoc? Added, bool TargetListOnly) AddActionViaUi(int typeIndex, int targetIndex)
+    {
+        if (CurEvent == null) return (0, null, false);
+
+        _actType.SelectedIndex = typeIndex;
+        if (targetIndex >= 0 && targetIndex < _actTarget.Items.Count)
+            _actTarget.SelectedIndex = targetIndex;
+        AddAction();
+
+        var acts = CurEvent?.Actions;
+        return (_actType.Items.Count,
+                acts is { Count: > 0 } ? acts[^1] : null,
+                _actTarget.DropDownStyle == ComboBoxStyle.DropDownList);
+    }
+
     void PasteAtMouse()
     {
         var anchor = MouseCellForPaste();
@@ -2054,18 +2082,32 @@ internal sealed class MainForm : Form
         {
             "触碰（角色进入这一格）",
             "压力板（这块板被玩家或箱子压住）",
+            "总是（每帧判条件，不看位置）",
         });
         _evtTrigger.SelectedIndex = 0;
         _evtTrigger.SelectedIndexChanged += (_, _) =>
         {
             if (_evtSyncing || CurEvent is not EventDoc ev) return;
-            ev.Trigger = _evtTrigger.SelectedIndex == 1 ? "plate" : "touch";
+            ev.Trigger = TriggerKey(_evtTrigger.SelectedIndex);
             if (ev.Trigger == "plate") EnsurePlateRef(ev);
             MarkDirty();
             _eventList.Invalidate();
             SyncPlateEditor();
         };
-        Put(right, _evtTrigger, 14, 86, 300, 24);
+        Put(right, _evtTrigger, 14, 86, 250, 24);
+
+        // 「总是」触发器的重复方式；别的触发器整排灰掉（值留着，切回去不用重填）
+        _evtRepeat.Text = "可重复触发";
+        _evtRepeat.SetBounds(272, 86, 92, 24);
+        _evtRepeat.CheckedChanged += (_, _) =>
+        {
+            if (_evtSyncing || CurEvent is not EventDoc ev) return;
+            ev.Repeat = _evtRepeat.Checked;
+            MarkDirty();
+            _eventList.Invalidate();
+            RefreshActList(ev);
+        };
+        right.Controls.Add(_evtRepeat);
 
         // ---- 压力板：填哪一块板（地图块 + 格）。留空的图块 = 用事件绑定格所在的那块 ----
         Put(right, _platePiece, 14, 116, 190, 24);
@@ -2097,12 +2139,10 @@ internal sealed class MainForm : Form
             };
         }
 
-        right.Controls.Add(new Label
-        {
-            Left = 370, Top = 120, Width = 110, Height = 20,
-            ForeColor = SystemColors.GrayText,
-            Text = "板被压住 = 激活",
-        });
+        _triggerHint.SetBounds(370, 120, 110, 20);
+        _triggerHint.ForeColor = SystemColors.GrayText;
+        _triggerHint.Text = "板被压住 = 激活";
+        right.Controls.Add(_triggerHint);
 
         // ---- 动作（任务计划程序里的"操作"）----
         var actBox = new GroupBox
@@ -2126,6 +2166,7 @@ internal sealed class MainForm : Form
             "跳转到指定关卡",
             "执行命令 / 打开链接",
             "隐藏本格图块（不再阻挡）",
+            "播放音效",
         });
         _actType.SetBounds(50, 132, 150, 24);
         _actType.SelectedIndex = 0;
@@ -2137,8 +2178,11 @@ internal sealed class MainForm : Form
         };
         actBox.Controls.Add(_actType);
 
-        actBox.Controls.Add(new Label { Text = "目标", Left = 208, Top = 136, Width = 34, Height = 20 });
-        _actTarget.DropDownStyle = ComboBoxStyle.DropDown;     // 关卡从下拉选，命令/网址直接打
+        _actTargetLabel.Text = "目标";
+        _actTargetLabel.SetBounds(208, 136, 34, 20);
+        actBox.Controls.Add(_actTargetLabel);
+
+        _actTarget.DropDownStyle = ComboBoxStyle.DropDown;     // 关卡 / 音效从下拉选，命令/网址直接打
         _actTarget.SetBounds(246, 132, 212, 24);
         actBox.Controls.Add(_actTarget);
 
@@ -2150,7 +2194,7 @@ internal sealed class MainForm : Form
         {
             Left = 12, Top = 190, Width = 446, Height = 18,
             ForeColor = SystemColors.GrayText,
-            Text = "跳转关卡：从下拉里选；执行命令：填程序 / 网址 / 文件，参数只对程序有用。",
+            Text = "跳关从下拉选关卡；执行命令填程序 / 网址 / 文件；播放音效从下拉选音效。",
         });
 
         actBox.Controls.Add(Btn("添加动作", 12, 214, 96, 26, (_, _) => AddAction()));
@@ -2285,7 +2329,8 @@ internal sealed class MainForm : Form
                 c.Enabled = on;
 
             _evtName.Text = ev?.Name ?? "";
-            _evtTrigger.SelectedIndex = ev?.Trigger == "plate" ? 1 : 0;
+            _evtTrigger.SelectedIndex = TriggerIndexOf(ev?.Trigger ?? "touch");
+            _evtRepeat.Checked = ev?.Repeat ?? false;
 
             RefreshActList(ev);
             RefreshCondList(ev);
@@ -2330,6 +2375,13 @@ internal sealed class MainForm : Form
             _platePiece.Enabled = plate;
             _plateX.Enabled = plate;
             _plateY.Enabled = plate;
+
+            // 「总是」触发器才有的重复方式；顺带把右边那格提示跟着触发器换
+            bool always = ev?.Trigger == "always";
+            _evtRepeat.Enabled = always;
+            _triggerHint.Text = always
+                ? ((ev?.Repeat ?? false) ? "成立就再触发" : "触发一次后不再触发")
+                : "板被压住 = 激活";
         }
         finally { _evtSyncing = false; }
     }
@@ -2369,14 +2421,16 @@ internal sealed class MainForm : Form
 
         var acts = CurEvent?.Actions;
         var act = acts != null && e.Index < acts.Count ? acts[e.Index] : null;
+        bool ignoredRun = CurEvent is { } ce && ce.RepeatingRunsCommand && act?.Type == "run";
         Color fg = act == null ? Color.Gray
-            : act.IsUnset ? Color.FromArgb(255, 120, 120)
+            : act.IsUnset || ignoredRun ? Color.FromArgb(255, 160, 110)
             : Color.FromArgb(222, 228, 238);
 
         string text = act == null
             ? ""
             : $"{e.Index + 1}. {act.Describe()}" +
-              (act.Type == "run" && !string.IsNullOrWhiteSpace(act.Args) ? $"  ({act.Args})" : "");
+              (act.Type == "run" && !string.IsNullOrWhiteSpace(act.Args) ? $"  ({act.Args})" : "") +
+              (ignoredRun ? "  （重复触发时不执行）" : "");
         TextRenderer.DrawText(e.Graphics, text, e.Font ?? Font, e.Bounds, fg,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
     }
@@ -2396,10 +2450,16 @@ internal sealed class MainForm : Form
             SyncActTargetHints();
             ApplyActTypeEnable();
 
-            _actTarget.Text = act == null ? ""
-                : act.Type == "goto" ? act.Level
-                : act.Type == "run" ? act.Target
-                : "";
+            int mode = _actType.SelectedIndex;
+            if (act == null)
+            {
+                if (mode != 3) _actTarget.Text = "";
+            }
+            else if (act.Type == "goto") _actTarget.Text = act.Level;
+            else if (act.Type == "run") _actTarget.Text = act.Target;
+            else if (act.Type == "sfx")
+                _actTarget.SelectedIndex = Math.Max(0, SfxCatalog.IndexOf(act.Sound));
+
             _actArgs.Text = act?.Args ?? "";
         }
         finally { _evtSyncing = false; }
@@ -2411,38 +2471,87 @@ internal sealed class MainForm : Form
         "goto" => 0,
         "run" => 1,
         "hide" => 2,
+        "sfx" => 3,
         _ => 1,
     };
 
-    /// <summary>"隐藏本格"不需要目标 / 参数，那两个框跟着灰掉。</summary>
+    /// <summary>触发器下拉框下标 ↔ 存进 JSON 的关键字，两处必须对得上。</summary>
+    static string TriggerKey(int index) => index switch
+    {
+        1 => "plate",
+        2 => "always",
+        _ => "touch",
+    };
+
+    static int TriggerIndexOf(string key) => key switch
+    {
+        "plate" => 1,
+        "always" => 2,
+        _ => 0,
+    };
+
+    /// <summary>"隐藏本格"不需要目标 / 参数，那两个框跟着灰掉；音效只要一个下拉，参数框灰掉。</summary>
     void ApplyActTypeEnable()
     {
         bool on = CurEvent?.Actions is { } acts &&
                   _actList.SelectedIndex >= 0 && _actList.SelectedIndex < acts.Count;
-        bool hide = _actType.SelectedIndex == 2;
+        int mode = _actType.SelectedIndex;
+        bool hide = mode == 2;
+        bool sfx = mode == 3;
+
         _actTarget.Enabled = on && !hide;
-        _actArgs.Enabled = on && !hide;
+        _actArgs.Enabled = on && !hide && !sfx;
+        _actTargetLabel.Text = sfx ? "音效" : "目标";
     }
 
-    /// <summary>目标那个下拉：跳关时把关卡名填成候选，执行命令时清空（直接手打路径/网址）。</summary>
+    /// <summary>
+    /// 目标那个下拉：跳关时把关卡名填成候选，执行命令时清空（直接手打路径/网址），
+    /// 播放音效时换成音效目录并且只允许从下拉里选（省得 key 手打错）。
+    /// </summary>
     void SyncActTargetHints()
     {
+        int mode = _actType.SelectedIndex;
         string keep = _actTarget.Text;
+
+        // 从"音效"切回别的类型时别把中文音效名当成命令 / 关卡带过去
+        if (_actMode == 3 && mode != 3) keep = "";
+
         _actTarget.BeginUpdate();
         _actTarget.Items.Clear();
-        if (_actType.SelectedIndex == 0)
+        if (mode == 0)
+        {
+            _actTarget.DropDownStyle = ComboBoxStyle.DropDown;
             foreach (string n in LevelStore.LevelNames()) _actTarget.Items.Add(n);
-        _actTarget.Text = keep;
+            _actTarget.Text = keep;
+        }
+        else if (mode == 3)
+        {
+            _actTarget.DropDownStyle = ComboBoxStyle.DropDownList;
+            foreach (var e in SfxCatalog.All) _actTarget.Items.Add(e.Label);
+
+            // 切过来之前框里可能还是关卡名 / 命令，对不上任何音效就选第一项（开锁）
+            int at = Array.FindIndex(SfxCatalog.All, e => e.Label == keep);
+            _actTarget.SelectedIndex = at >= 0 ? at : 0;
+        }
+        else
+        {
+            _actTarget.DropDownStyle = ComboBoxStyle.DropDown;
+            _actTarget.Text = keep;
+        }
         _actTarget.EndUpdate();
+        _actMode = mode;
     }
 
     /// <summary>把动作编辑区读成一条动作。</summary>
     ActionDoc ReadActFromUi()
     {
-        if (_actType.SelectedIndex == 2) return new ActionDoc { Type = "hide" };
+        int mode = _actType.SelectedIndex;
+        if (mode == 2) return new ActionDoc { Type = "hide" };
+        if (mode == 3)
+            return new ActionDoc { Type = "sfx", Sound = SfxCatalog.KeyAt(_actTarget.SelectedIndex) };
 
         string target = _actTarget.Text.Trim();
-        return _actType.SelectedIndex == 0
+        return mode == 0
             ? new ActionDoc { Type = "goto", Level = target }
             : new ActionDoc { Type = "run", Target = target, Args = _actArgs.Text.Trim() };
     }

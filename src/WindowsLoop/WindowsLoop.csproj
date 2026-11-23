@@ -17,6 +17,8 @@
        在瓦片工具里改完默认值后跑一次 build.cmd 才会生效。 -->
   <ItemGroup>
     <Compile Include="..\Shared\TileMeta.cs" Link="Shared\TileMeta.cs" />
+    <!-- 事件「播放音效」的音效目录：游戏和关卡编辑器共用同一份，key 不会写岔。 -->
+    <Compile Include="..\Shared\SfxCatalog.cs" Link="Shared\SfxCatalog.cs" />
   </ItemGroup>
 
   <!-- 素材编进程序集：单文件分发时 exe 旁边不带任何目录，运行时由 Assets.cs 从内存读。
