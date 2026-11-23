@@ -19,6 +19,10 @@ internal enum Sfx
     CantOpen,
     /// <summary>关卡事件动作「播放音效」里可选的"开锁"（事件按 key 触发）。</summary>
     Unlock,
+    /// <summary>压力板被踩下去。</summary>
+    PlateDown,
+    /// <summary>压力板松开弹起。</summary>
+    PlateUp,
 }
 
 /// <summary>
@@ -54,6 +58,12 @@ internal sealed class AudioManager : IDisposable
     const string CantOpenName = "sneeze-ah-ah-ahah-ahh-ahah"; // 到上限时的连续"啊"
     /// <summary>开锁：tools/gen_unlock_sfx.py 合成的金属"嗒"+ 锁舌 + 上行铃音。</summary>
     const string UnlockName = "unlock";
+    /// <summary>
+    /// 压力板：tools/gen_plate_sfx.py 合成的石质"咔"。
+    /// 两段都在 0.1 秒内，按下更沉、松开更轻偏高 —— 听感上能分清是踩下去还是弹起来。
+    /// </summary>
+    const string PlateDownName = "plate-down";
+    const string PlateUpName = "plate-up";
 
     const float BgmVolume = 0.34f;
 
@@ -96,6 +106,11 @@ internal sealed class AudioManager : IDisposable
         [Sfx.CantOpen] = (CantOpenName, 0.68f, 0f, false, 0f),
         // 开锁：完整播放（铃音尾巴别截），0.06s 内重复触发算同一次，避免叠成糊响
         [Sfx.Unlock] = (UnlockName, 0.90f, 0f, false, 0.06f),
+        // 压力板：一记极短的干"咔"。同一个板子被踩 / 松开时都只留最新一声，
+        // 所以 Exclusive 打开；0.05s 去抖挡住箱子在板上抖动带出的一串碎响。
+        // MaxSeconds 比素材本身长一点点，留给解码器定位余量。
+        [Sfx.PlateDown] = (PlateDownName, 0.60f, 0.12f, true, 0.05f),
+        [Sfx.PlateUp] = (PlateUpName, 0.42f, 0.10f, true, 0.05f),
     };
 
     /// <summary>
@@ -566,7 +581,7 @@ internal static class AudioSelfTest
             "walk-gravel-loop-200bpm", "walk-loop",
             "Land 1", "Land 4", "Game Item 32",
             "whoosh", "bump", "sneeze-ahhh", "sneeze-choo", "sneeze-ah-ah-ahah-ahh-ahah",
-            "unlock",
+            "unlock", "plate-down", "plate-up",
         };
         foreach (string name in names)
         {
@@ -597,6 +612,8 @@ internal static class AudioSelfTest
                      (Sfx.Choo, "Choo/飞出"),
                      (Sfx.CantOpen, "CantOpen/开不出"),
                      (Sfx.Unlock, "Unlock/开锁"),
+                     (Sfx.PlateDown, "PlateDown/压力板按下"),
+                     (Sfx.PlateUp, "PlateUp/压力板松开"),
                  })
         {
             var (peakDb, rms, sec, note) = am.ProbeSfx(sfx);

@@ -1970,6 +1970,13 @@ internal sealed partial class Game
     readonly HashSet<int> _plateDown = new();
 
     /// <summary>
+    /// 上一帧**物理上**被压住的板（地图块 + 块内格）。
+    /// 和 <see cref="_plateDown"/> 分开：那个是"事件激活"状态（带条件），这个是"脚真的踩在上面"。
+    /// 压力板的按下 / 松开音效跟这个走，条件不满足时踩上去也照样有声音。
+    /// </summary>
+    readonly HashSet<(Piece Piece, int X, int Y)> _plateHeld = new();
+
+    /// <summary>
     /// 挂着"隐藏本格"操作的格子（关卡读进来时预扫一遍）。
     /// 每帧按激活状态重算 <see cref="_hidden"/>，别在绘制 / 碰撞时临时判。
     /// </summary>
@@ -2052,6 +2059,7 @@ internal sealed partial class Game
     {
         _activeEvents.Clear();
         _plateDown.Clear();
+        _plateHeld.Clear();
         foreach (var set in _hidden.Values) set.Clear();
     }
 
@@ -2106,6 +2114,17 @@ internal sealed partial class Game
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// 压力板的归一化身份：地图块 + 块内格坐标。
+    /// 关卡里用的可能是连续坐标（x=3 和 x=13 是同一块板），wrap 成块内格之后
+    /// 才能在"它是不是还是刚才那块板"这件事上对上号。
+    /// </summary>
+    static (Piece Piece, int X, int Y) PlateKey(Piece piece, int x, int y)
+    {
+        int w = Math.Max(1, piece.Width), h = Math.Max(1, piece.Height);
+        return (piece, ((x % w) + w) % w, ((y % h) + h) % h);
     }
 
     /// <summary>
@@ -2215,6 +2234,9 @@ internal sealed partial class Game
     /// <summary>
     /// 压力板事件：板子按着就算激活（藏起来的图块随之消失），松开就撤掉。
     /// goto / run 这类一次性动作只在"刚踩下去"那一帧跑，不会每帧重放。
+    ///
+    /// 按下 / 松开的音效挂在**物理按压**的边沿上，不看 ConditionsMet ——
+    /// 条件不满足的板子照样会被踩下去，那时候没声音比响了更奇怪。
     /// </summary>
     void UpdatePlateEvents()
     {
@@ -2224,7 +2246,27 @@ internal sealed partial class Game
             if (index < 0 || index >= Level.Events.Count) continue;
 
             var ev = Level.Events[index];
-            bool down = PlatePressed(piece, ev.PlateX, ev.PlateY) && ConditionsMet(ev);
+            bool pressed = PlatePressed(piece, ev.PlateX, ev.PlateY);
+
+            // 音效：同一块板被好几条事件盯着时只响一次，所以按"地图块 + 块内格"去重，
+            // 而不是按事件下标
+            var key = PlateKey(piece, ev.PlateX, ev.PlateY);
+            bool held = _plateHeld.Contains(key);
+            if (pressed != held)
+            {
+                if (pressed)
+                {
+                    _plateHeld.Add(key);
+                    Audio.Play(Sfx.PlateDown);
+                }
+                else
+                {
+                    _plateHeld.Remove(key);
+                    Audio.Play(Sfx.PlateUp);
+                }
+            }
+
+            bool down = pressed && ConditionsMet(ev);
 
             bool was = _plateDown.Contains(index);
             if (down == was) continue;
