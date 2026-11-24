@@ -8,6 +8,9 @@
     <Nullable>enable</Nullable>
     <AssemblyName>WindowsLoop</AssemblyName>
     <RootNamespace>WindowsLoop</RootNamespace>
+    <!-- exe 图标：由主角贴图 player.png（8x8）整数倍最近邻放大生成，
+         多尺寸 16/24/32/48/64/128/256 已内置于 app.ico。 -->
+    <ApplicationIcon>assets\app.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
   </PropertyGroup>
