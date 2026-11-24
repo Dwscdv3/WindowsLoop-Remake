@@ -105,10 +105,31 @@ internal sealed partial class Game
     public void Enqueue(Action action) => _actions.Enqueue(action);
 
     /// <summary>
-    /// 第一块窗口的默认客户区原点：启动进关时把窗口摆在这里。
+    /// 第一块窗口的默认客户区原点：主屏工作区正中，落点对齐到 40px 整格网格。
+    ///
+    /// 网格对齐优先于"像素级正中" —— 窗口原点只能是整格点，所以窗口中心相对屏幕中心
+    /// 会有最多半格（20px）的偏差，换来的是和之后吐出来的窗口能严丝合缝地拼接。
     /// 重开不回到这个点 —— 那个位置属于玩家，留用窗口原位不动。
     /// </summary>
-    public static Point DefaultClientOrigin => GameWindow.ClampToScreen(new Point(240, 160));
+    public static Point DefaultClientOrigin
+    {
+        get
+        {
+            var size = new Size(GameWindow.ViewTilesX * GameWindow.TileSize,
+                                GameWindow.ViewTilesY * GameWindow.TileSize);
+
+            // 主屏工作区（已扣掉任务栏）；拿不到时退化成屏幕左上角，ClampToScreen 会兜底
+            var work = Screen.PrimaryScreen?.WorkingArea
+                       ?? new Rectangle(0, 0, size.Width, size.Height);
+
+            int x = work.Left + (work.Width - size.Width) / 2;
+            int y = work.Top + (work.Height - size.Height) / 2;
+
+            return GameWindow.ClampToScreen(new Point(
+                GameWindow.GridRound(x),
+                GameWindow.GridRound(y)));
+        }
+    }
 
     public void PumpActions()
     {
