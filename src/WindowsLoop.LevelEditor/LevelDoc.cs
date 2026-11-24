@@ -816,9 +816,6 @@ internal static class LevelStore
                 // 编辑器画布上会画成红色 '?'，由用户决定刷掉还是补图例
             }
             if (!InRange(p.Spawn, w, p.Height)) return $"{p.Id} 的 spawn 超出地图";
-            // 挡不挡是格子的属性（可以逐格覆盖瓦片默认），所以用 EffectiveSolid 判断
-            if (p.EffectiveSolid(doc, p.Spawn[0], p.Spawn[1]))
-                return $"{p.Id} 的 spawn 落在阻挡格里，角色会被卡住";
 
             // evt 层引用了不存在的事件组：游戏会把它当"没挂事件"，纯属数据错误，值得拦住
             if (p.Evt != null)
