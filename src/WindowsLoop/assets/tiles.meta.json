@@ -10,6 +10,7 @@
       "water": false,
       "climb": false,
       "spring": false,
+      "plate": false,
       "note": "整格全透明，跟背景同色，只适合当看不见的填充"
     },
     {
@@ -20,7 +21,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 2,
@@ -30,17 +32,19 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 3,
       "name": "洞壁·碎石 3",
       "group": "洞壁",
-      "solid": false,
+      "solid": true,
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 4,
@@ -50,7 +54,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 5,
@@ -60,7 +65,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 6,
@@ -70,7 +76,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 7,
@@ -80,7 +87,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 8,
@@ -90,7 +98,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 9,
@@ -100,7 +109,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 10,
@@ -110,7 +120,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 11,
@@ -120,7 +131,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 12,
@@ -130,7 +142,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 13,
@@ -140,7 +153,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 14,
@@ -150,7 +164,8 @@
       "platform": true,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 15,
@@ -160,7 +175,8 @@
       "platform": true,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 16,
@@ -170,7 +186,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 17,
@@ -180,7 +197,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 18,
@@ -190,7 +208,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 19,
@@ -200,7 +219,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 20,
@@ -210,17 +230,19 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 21,
       "name": "灯柱",
       "group": "物件",
-      "solid": false,
+      "solid": true,
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 22,
@@ -230,17 +252,19 @@
       "platform": true,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 23,
       "name": "木板",
       "group": "木构",
-      "solid": false,
+      "solid": true,
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 24,
@@ -250,7 +274,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 25,
@@ -260,7 +285,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 26,
@@ -270,7 +296,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 27,
@@ -280,7 +307,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 28,
@@ -290,7 +318,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 29,
@@ -300,7 +329,8 @@
       "platform": false,
       "water": true,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 30,
@@ -310,7 +340,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 31,
@@ -320,7 +351,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 32,
@@ -330,7 +362,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 33,
@@ -340,7 +373,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 34,
@@ -350,7 +384,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 35,
@@ -360,7 +395,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 36,
@@ -370,7 +406,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 37,
@@ -380,7 +417,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 38,
@@ -390,7 +428,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 39,
@@ -400,7 +439,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 40,
@@ -410,7 +450,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 41,
@@ -420,7 +461,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 42,
@@ -430,7 +472,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 43,
@@ -440,7 +483,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 44,
@@ -450,7 +494,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 45,
@@ -460,7 +505,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 46,
@@ -471,6 +517,7 @@
       "water": false,
       "climb": false,
       "spring": false,
+      "plate": false,
       "note": "看着像能站的横梁，实际很薄；要站人请用 S 手动标阻挡"
     },
     {
@@ -481,7 +528,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 48,
@@ -491,7 +539,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 49,
@@ -502,6 +551,7 @@
       "water": false,
       "climb": false,
       "spring": false,
+      "plate": false,
       "note": "level2 里的 'J' 弹簧用的是这块，贴图其实不是弹簧"
     },
     {
@@ -512,7 +562,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 51,
@@ -522,7 +573,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 52,
@@ -532,7 +584,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 53,
@@ -543,6 +596,7 @@
       "water": false,
       "climb": false,
       "spring": false,
+      "plate": false,
       "note": "几乎空，基本没东西"
     },
     {
@@ -554,6 +608,7 @@
       "water": false,
       "climb": true,
       "spring": false,
+      "plate": false,
       "note": "真正的梯子贴图；level2 / bg-test 里那个 'L' 还是旧的 65（水纹）"
     },
     {
@@ -564,7 +619,8 @@
       "platform": false,
       "water": false,
       "climb": true,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 56,
@@ -574,7 +630,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 57,
@@ -584,7 +641,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 58,
@@ -594,7 +652,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 59,
@@ -604,7 +663,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 60,
@@ -614,7 +674,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 61,
@@ -624,7 +685,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 62,
@@ -634,7 +696,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 63,
@@ -644,7 +707,8 @@
       "platform": false,
       "water": true,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 64,
@@ -654,7 +718,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 65,
@@ -664,7 +729,8 @@
       "platform": false,
       "water": true,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 66,
@@ -674,7 +740,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 67,
@@ -684,7 +751,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 68,
@@ -694,7 +762,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 69,
@@ -716,7 +785,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 71,
@@ -726,7 +796,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 72,
@@ -736,7 +807,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 73,
@@ -746,7 +818,8 @@
       "platform": false,
       "water": true,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 74,
@@ -756,7 +829,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 75,
@@ -766,7 +840,8 @@
       "platform": false,
       "water": true,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 76,
@@ -776,7 +851,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 77,
@@ -787,6 +863,7 @@
       "water": false,
       "climb": false,
       "spring": false,
+      "plate": false,
       "note": "一堆挡路的巨石，默认实心"
     },
     {
@@ -797,7 +874,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 79,
@@ -807,7 +885,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 80,
@@ -817,7 +896,8 @@
       "platform": false,
       "water": true,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 81,
@@ -827,7 +907,8 @@
       "platform": false,
       "water": true,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 82,
@@ -837,7 +918,8 @@
       "platform": false,
       "water": true,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 83,
@@ -848,6 +930,7 @@
       "water": false,
       "climb": false,
       "spring": false,
+      "plate": false,
       "note": "满铺不透明，当岩体用"
     },
     {
@@ -858,7 +941,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 85,
@@ -869,6 +953,7 @@
       "water": false,
       "climb": false,
       "spring": false,
+      "plate": false,
       "note": "引擎没有斜坡物理，实际按整格实心算"
     },
     {
@@ -880,6 +965,7 @@
       "water": false,
       "climb": false,
       "spring": false,
+      "plate": false,
       "note": "纯装饰，站在上面不会有碰撞"
     },
     {
@@ -890,7 +976,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 88,
@@ -900,7 +987,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 89,
@@ -910,7 +998,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 90,
@@ -921,6 +1010,7 @@
       "water": false,
       "climb": false,
       "spring": false,
+      "plate": false,
       "note": "满铺不透明，当岩体用"
     },
     {
@@ -931,7 +1021,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 92,
@@ -941,7 +1032,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 93,
@@ -952,6 +1044,7 @@
       "water": false,
       "climb": false,
       "spring": false,
+      "plate": false,
       "note": "素材来自 assets/gem.png（图集外补进去的 93 号格）。它只是一块普通瓦片，碰到会怎样由网格事件决定"
     },
     {
@@ -962,7 +1055,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     },
     {
       "sprite": 95,
@@ -972,7 +1066,8 @@
       "platform": false,
       "water": false,
       "climb": false,
-      "spring": false
+      "spring": false,
+      "plate": false
     }
   ]
 }
