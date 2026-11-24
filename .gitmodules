@@ -1,0 +1,3 @@
+[submodule "ref-original"]
+	path = ref-original
+	url = https://github.com/SardineFish/WindowsLoop.git
