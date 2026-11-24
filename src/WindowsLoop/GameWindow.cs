@@ -493,15 +493,25 @@ internal sealed class GameWindow : Form
 
         // 整组共用一条外轮廓：换算到本窗口的客户坐标，超出部分由位图边界自然裁掉。
         // 所以拼缝内侧不亮、转角由折线的 join 连成一整圈。
+        //
+        // 注意 Boundary 可能是好几条环：四块以上围成一圈、中间留了个洞时，
+        // 外圈和洞各是一条独立的环。这里必须让每个环各自成为一个新图形（AddPolygon 自带
+        // 起始 + 闭合），不能用连续 AddLines —— 那样第二段会接着第一段的末尾往下连，
+        // 于是"外圈最后一点 → 洞的第一点"被连成一条穿过整组窗口的斜线。
         var origin = ClientScreen.Location;
         using var path = new GraphicsPath();
         foreach (var loop in group.Boundary)
         {
-            if (loop.Count < 3) continue;
-            var pts = new PointF[loop.Count];
-            for (int i = 0; i < loop.Count; i++)
+            // Simplify 已经把一个环的首点复制到末尾做闭合；AddPolygon 自己会闭合，
+            // 去掉重复的那一点，免得留一条零长线段。
+            int n = loop.Count;
+            if (n > 1 && loop[0] == loop[n - 1]) n--;
+            if (n < 3) continue;
+
+            var pts = new PointF[n];
+            for (int i = 0; i < n; i++)
                 pts[i] = new PointF(loop[i].X - origin.X, loop[i].Y - origin.Y);
-            path.AddLines(pts);
+            path.AddPolygon(pts);
         }
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
